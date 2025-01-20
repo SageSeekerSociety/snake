@@ -15,5 +15,5 @@ data class ExecPost200ResponseDTO(
     @field:Valid
     @Schema(example = "null", description = "")
     @get:JsonProperty("data")
-    val `data`: kotlin.collections.List<ExecPost200ResponseDataInnerDTO>? = null
+    val `data`: kotlin.collections.List<ExecPost200ResponseDataInnerDTO>? = null,
 ) {}

@@ -13,5 +13,5 @@ data class SubmitPost200ResponseCompileDTO(
     val success: kotlin.Boolean? = null,
     @Schema(example = "null", description = "")
     @get:JsonProperty("diagnose")
-    val diagnose: kotlin.String? = null
+    val diagnose: kotlin.String? = null,
 ) {}

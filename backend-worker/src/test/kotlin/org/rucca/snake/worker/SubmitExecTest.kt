@@ -16,11 +16,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @AutoConfigureMockMvc
 @TestMethodOrder(OrderAnnotation::class)
-class SubmitExecTest
-@Autowired
-constructor(
-    private val mockMvc: MockMvc,
-) {
+class SubmitExecTest @Autowired constructor(private val mockMvc: MockMvc) {
     @Test
     @Order(10)
     fun testSubmit() {
