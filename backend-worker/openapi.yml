@@ -1,0 +1,114 @@
+openapi: 3.0.0
+info:
+  title: API
+  version: 1.0.0
+paths:
+  /api/exec:
+    post:
+      summary: Execute code in sandbox
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                uid:
+                  type: array
+                  items:
+                    type: string
+                  description: Array of user IDs
+                input:
+                  type: string
+                  description: Input for the execution
+      responses:
+        '200':
+          description: Execution successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        sid:
+                          type: string
+                        output:
+                          type: string
+                          nullable: true
+                        result:
+                          type: object
+                          nullable: true
+                        error:
+                          type: string
+                          nullable: true
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  error:
+                    type: string
+  /api/submit:
+    post:
+      summary: Submit source code
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                src:
+                  type: string
+                  format: binary
+                  description: Source code file
+      responses:
+        '200':
+          description: Submission successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    nullable: true
+                  compile:
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                      diagnose:
+                        type: string
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  compile:
+                    type: object
+                    nullable: true
+        '403':
+          description: Submission rejected
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: Submission Rejected
