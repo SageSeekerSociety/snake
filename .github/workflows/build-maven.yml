@@ -16,7 +16,7 @@ jobs:
 
     strategy:
       matrix:
-        project: ["backend-worker"]
+        project: ["backend-controller", "backend-worker"]
 
     steps:
       - uses: actions/checkout@v4
