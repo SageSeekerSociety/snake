@@ -206,6 +206,9 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.2</version>
                 <configuration>
+                    <systemPropertyVariables>
+                        <logging.level.root>WARN</logging.level.root>
+                    </systemPropertyVariables>
                     <argLine>${argLine} -XX:+EnableDynamicAgentLoading</argLine>
                 </configuration>
             </plugin>
