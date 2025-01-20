@@ -1,0 +1,54 @@
+name: Build Maven Projects
+
+on:
+  push:
+    branches: ["main", "dev"]
+  pull_request:
+    branches: ["main", "dev"]
+  merge_group:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        project: ["backend-worker"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "temurin"
+          cache: "maven"
+
+      - name: Build with Maven
+        working-directory: ${{ matrix.project }}
+        run: ./mvnw install
+
+      - name: Check uncommitted changes to ensure format applied
+        run: |
+          if [[ -n $(git status --porcelain) ]]; then
+            git status
+            echo "There are uncommitted changes. Please run './mvnw spotless:apply' and commit the changes."
+            exit 1
+          else
+            echo "No uncommitted changes."
+          fi
+
+      - name: Upload jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.project }}-jar
+          path: ${{ matrix.project }}/target/*.jar
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.project }}-coverage
+          path: ${{ matrix.project }}/target/site/jacoco
