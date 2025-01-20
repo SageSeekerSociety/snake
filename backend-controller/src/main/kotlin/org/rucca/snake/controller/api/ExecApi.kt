@@ -23,10 +23,7 @@ import org.springframework.web.bind.annotation.*
 interface ExecApi {
 
     @Operation(
-        tags =
-            [
-                "default",
-            ],
+        tags = ["default"],
         summary = "Execute code in sandbox",
         operationId = "execPost",
         description = """""",
@@ -36,21 +33,21 @@ interface ExecApi {
                     responseCode = "200",
                     description = "Execution successful",
                     content =
-                        [Content(schema = Schema(implementation = ExecPost200ResponseDTO::class))]
+                        [Content(schema = Schema(implementation = ExecPost200ResponseDTO::class))],
                 ),
                 ApiResponse(
                     responseCode = "400",
                     description = "Bad request",
                     content =
-                        [Content(schema = Schema(implementation = ExecPost400ResponseDTO::class))]
-                )
-            ]
+                        [Content(schema = Schema(implementation = ExecPost400ResponseDTO::class))],
+                ),
+            ],
     )
     @RequestMapping(
         method = [RequestMethod.POST],
         value = ["/exec"],
         produces = ["application/json"],
-        consumes = ["application/json"]
+        consumes = ["application/json"],
     )
     fun execPost(
         @Parameter(description = "", required = true)

@@ -23,5 +23,5 @@ data class ExecPost200ResponseDataInnerDTO(
     val result: kotlin.Any? = null,
     @Schema(example = "null", description = "")
     @get:JsonProperty("error")
-    val error: kotlin.String? = null
+    val error: kotlin.String? = null,
 ) {}
