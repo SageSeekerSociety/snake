@@ -23,10 +23,7 @@ import org.springframework.web.bind.annotation.*
 interface SubmitApi {
 
     @Operation(
-        tags =
-            [
-                "default",
-            ],
+        tags = ["default"],
         summary = "Submit source code",
         operationId = "submitPost",
         description = """""",
@@ -36,27 +33,27 @@ interface SubmitApi {
                     responseCode = "200",
                     description = "Submission successful",
                     content =
-                        [Content(schema = Schema(implementation = SubmitPost200ResponseDTO::class))]
+                        [Content(schema = Schema(implementation = SubmitPost200ResponseDTO::class))],
                 ),
                 ApiResponse(
                     responseCode = "400",
                     description = "Bad request",
                     content =
-                        [Content(schema = Schema(implementation = SubmitPost400ResponseDTO::class))]
+                        [Content(schema = Schema(implementation = SubmitPost400ResponseDTO::class))],
                 ),
                 ApiResponse(
                     responseCode = "403",
                     description = "Submission rejected",
                     content =
-                        [Content(schema = Schema(implementation = SubmitPost403ResponseDTO::class))]
-                )
-            ]
+                        [Content(schema = Schema(implementation = SubmitPost403ResponseDTO::class))],
+                ),
+            ],
     )
     @RequestMapping(
         method = [RequestMethod.POST],
         value = ["/submit"],
         produces = ["application/json"],
-        consumes = ["multipart/form-data"]
+        consumes = ["multipart/form-data"],
     )
     fun submitPost(
         @Parameter(description = "Source code file")

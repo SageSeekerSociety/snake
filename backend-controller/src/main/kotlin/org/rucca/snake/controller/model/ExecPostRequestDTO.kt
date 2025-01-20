@@ -13,5 +13,5 @@ data class ExecPostRequestDTO(
     val uid: kotlin.collections.List<kotlin.String>? = null,
     @Schema(example = "null", description = "Input for the execution")
     @get:JsonProperty("input")
-    val input: kotlin.String? = null
+    val input: kotlin.String? = null,
 ) {}

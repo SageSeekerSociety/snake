@@ -15,5 +15,5 @@ data class SubmitPost400ResponseDTO(
     @field:Valid
     @Schema(example = "null", description = "")
     @get:JsonProperty("compile")
-    val compile: kotlin.Any? = null
+    val compile: kotlin.Any? = null,
 ) {}

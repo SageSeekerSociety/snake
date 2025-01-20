@@ -15,5 +15,5 @@ data class SubmitPost200ResponseDTO(
     @field:Valid
     @Schema(example = "null", description = "")
     @get:JsonProperty("compile")
-    val compile: SubmitPost200ResponseCompileDTO? = null
+    val compile: SubmitPost200ResponseCompileDTO? = null,
 ) {}
