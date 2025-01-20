@@ -3,7 +3,7 @@ info:
   title: API
   version: 1.0.0
 paths:
-  /api/exec:
+  /exec:
     post:
       summary: Execute code in sandbox
       requestBody:
@@ -58,7 +58,7 @@ paths:
                     type: boolean
                   error:
                     type: string
-  /api/submit:
+  /submit:
     post:
       summary: Submit source code
       requestBody:

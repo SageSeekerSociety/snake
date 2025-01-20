@@ -5,15 +5,15 @@ import io.swagger.v3.oas.annotations.media.Schema
 import javax.validation.Valid
 
 /**
- * @param error
- * @param compile
+ * @param success
+ * @param &#x60;data&#x60;
  */
-data class ApiSubmitPost200ResponseDTO(
+data class ExecPost200ResponseDTO(
     @Schema(example = "null", description = "")
-    @get:JsonProperty("error")
-    val error: kotlin.String? = null,
+    @get:JsonProperty("success")
+    val success: kotlin.Boolean? = null,
     @field:Valid
     @Schema(example = "null", description = "")
-    @get:JsonProperty("compile")
-    val compile: ApiSubmitPost200ResponseCompileDTO? = null
+    @get:JsonProperty("data")
+    val `data`: kotlin.collections.List<ExecPost200ResponseDataInnerDTO>? = null
 ) {}

@@ -7,7 +7,7 @@ import io.swagger.v3.oas.annotations.media.Schema
  * @param success
  * @param error
  */
-data class ApiExecPost400ResponseDTO(
+data class ExecPost400ResponseDTO(
     @Schema(example = "null", description = "")
     @get:JsonProperty("success")
     val success: kotlin.Boolean? = null,

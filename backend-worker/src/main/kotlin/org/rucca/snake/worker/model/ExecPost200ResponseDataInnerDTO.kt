@@ -10,7 +10,7 @@ import javax.validation.Valid
  * @param result
  * @param error
  */
-data class ApiExecPost200ResponseDataInnerDTO(
+data class ExecPost200ResponseDataInnerDTO(
     @Schema(example = "null", description = "")
     @get:JsonProperty("sid")
     val sid: kotlin.String? = null,

@@ -7,7 +7,7 @@ import io.swagger.v3.oas.annotations.media.Schema
  * @param uid Array of user IDs
  * @param input Input for the execution
  */
-data class ApiExecPostRequestDTO(
+data class ExecPostRequestDTO(
     @Schema(example = "null", description = "Array of user IDs")
     @get:JsonProperty("uid")
     val uid: kotlin.collections.List<kotlin.String>? = null,

@@ -8,12 +8,12 @@ import javax.validation.Valid
  * @param error
  * @param compile
  */
-data class ApiSubmitPost400ResponseDTO(
+data class SubmitPost200ResponseDTO(
     @Schema(example = "null", description = "")
     @get:JsonProperty("error")
     val error: kotlin.String? = null,
     @field:Valid
     @Schema(example = "null", description = "")
     @get:JsonProperty("compile")
-    val compile: kotlin.Any? = null
+    val compile: SubmitPost200ResponseCompileDTO? = null
 ) {}
