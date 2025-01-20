@@ -1,7 +1,13 @@
 version: 2
 updates:
   - package-ecosystem: 'maven'
-    directory: '/'
+    directory: '/backend-controller'
+    schedule:
+      interval: 'daily'
+  
+
+  - package-ecosystem: 'maven'
+    directory: '/backend-worker'
     schedule:
       interval: 'daily'
 
