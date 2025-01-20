@@ -1,9 +1,8 @@
 package org.rucca.snake.worker.api
 
-import org.springframework.web.context.request.NativeWebRequest
-
-import javax.servlet.http.HttpServletResponse
 import java.io.IOException
+import javax.servlet.http.HttpServletResponse
+import org.springframework.web.context.request.NativeWebRequest
 
 object ApiUtil {
     fun setExampleResponse(req: NativeWebRequest, contentType: String, example: String) {
