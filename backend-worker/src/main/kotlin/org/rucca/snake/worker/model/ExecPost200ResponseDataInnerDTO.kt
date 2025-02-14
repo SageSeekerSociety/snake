@@ -7,6 +7,7 @@ import javax.validation.Valid
 /**
  * @param userId
  * @param output
+ * @param sandbox
  * @param error
  */
 data class ExecPost200ResponseDataInnerDTO(
@@ -16,8 +17,11 @@ data class ExecPost200ResponseDataInnerDTO(
     @Schema(example = "null", required = true, description = "")
     @get:JsonProperty("output", required = true)
     val output: kotlin.String,
-    @field:Valid
     @Schema(example = "null", required = true, description = "")
-    @get:JsonProperty("error", required = true)
-    val error: kotlin.Any,
+    @get:JsonProperty("sandbox", required = true)
+    val sandbox: kotlin.String,
+    @field:Valid
+    @Schema(example = "null", description = "")
+    @get:JsonProperty("error")
+    val error: kotlin.Any? = null,
 ) {}

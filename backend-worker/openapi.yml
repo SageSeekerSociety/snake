@@ -90,12 +90,14 @@ paths:
                       required:
                         - userId
                         - output
-                        - error
+                        - sandbox
                       properties:
                         userId:
                           type: integer
                           format: int64
                         output:
+                          type: string
+                        sandbox:
                           type: string
                         error:
                           type: object

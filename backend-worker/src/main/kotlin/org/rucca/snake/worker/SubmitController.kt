@@ -11,7 +11,7 @@ import org.springframework.web.multipart.MultipartFile
 
 @RestController
 class SubmitController(
-    private val submitService: SubmitService,
+    private val submitService: SubmitExecService,
     private val authenticationService: AuthenticationService,
 ) : SubmitApi {
     @Guard("submit", "program")

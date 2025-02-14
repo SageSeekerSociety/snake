@@ -18,4 +18,7 @@ class ApplicationConfig {
     lateinit var compilerPath: String
     lateinit var compilerParameter: List<String>
     lateinit var dataDirectory: String
+
+    lateinit var nsjailPath: String
+    lateinit var nsjailParameter: List<String>
 }
