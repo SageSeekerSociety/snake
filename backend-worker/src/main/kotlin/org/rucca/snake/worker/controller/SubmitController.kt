@@ -1,5 +1,6 @@
 package org.rucca.snake.worker.controller
 
+import org.rucca.cheese.auth.annotation.Guard
 import org.rucca.snake.worker.api.SubmitApi
 import org.rucca.snake.worker.model.SubmitPost200ResponseDTO
 import org.springframework.http.ResponseEntity
@@ -8,6 +9,7 @@ import org.springframework.web.multipart.MultipartFile
 
 @RestController
 class SubmitController : SubmitApi {
+    @Guard("submit", "program")
     override fun submitPost(src: MultipartFile?): ResponseEntity<SubmitPost200ResponseDTO> {
         return super.submitPost(src)
     }
