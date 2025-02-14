@@ -1,9 +1,8 @@
-package org.rucca.snake.worker.service
+package org.rucca.snake.worker
 
 import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import org.rucca.cheese.auth.config.ApplicationConfig
 import org.rucca.cheese.auth.persistent.IdType
 import org.springframework.stereotype.Service
 import org.springframework.web.multipart.MultipartFile

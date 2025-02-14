@@ -7,7 +7,7 @@
  *
  */
 
-package org.rucca.cheese.auth.config
+package org.rucca.snake.worker
 
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.stereotype.Component

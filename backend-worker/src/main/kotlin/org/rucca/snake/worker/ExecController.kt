@@ -1,4 +1,4 @@
-package org.rucca.snake.worker.controller
+package org.rucca.snake.worker
 
 import org.rucca.cheese.auth.annotation.Guard
 import org.rucca.snake.worker.api.ExecApi
