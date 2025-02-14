@@ -26,6 +26,11 @@ jobs:
           java-version: "21"
           distribution: "temurin"
           cache: "maven"
+      
+      - name: Start Dependencies
+        run: |
+          cp sample.env .env
+          docker compose -f docker-compose.yml up -d
 
       - name: Build with Maven
         working-directory: ${{ matrix.project }}
