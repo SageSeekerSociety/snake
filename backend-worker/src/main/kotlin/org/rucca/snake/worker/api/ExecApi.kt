@@ -11,7 +11,6 @@ import io.swagger.v3.oas.annotations.responses.*
 import io.swagger.v3.oas.annotations.security.*
 import javax.validation.Valid
 import org.rucca.snake.worker.model.ExecPost200ResponseDTO
-import org.rucca.snake.worker.model.ExecPost400ResponseDTO
 import org.rucca.snake.worker.model.ExecPostRequestDTO
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
@@ -34,13 +33,7 @@ interface ExecApi {
                     description = "Execution successful",
                     content =
                         [Content(schema = Schema(implementation = ExecPost200ResponseDTO::class))],
-                ),
-                ApiResponse(
-                    responseCode = "400",
-                    description = "Bad request",
-                    content =
-                        [Content(schema = Schema(implementation = ExecPost400ResponseDTO::class))],
-                ),
+                )
             ],
     )
     @RequestMapping(

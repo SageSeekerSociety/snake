@@ -16,6 +16,6 @@ import org.springframework.stereotype.Component
 @ConfigurationProperties(prefix = "application")
 class ApplicationConfig {
     lateinit var compilerPath: String
-    lateinit var compilerParameter: String
+    lateinit var compilerParameter: List<String>
     lateinit var dataDirectory: String
 }

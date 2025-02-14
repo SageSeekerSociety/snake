@@ -11,8 +11,6 @@ import io.swagger.v3.oas.annotations.responses.*
 import io.swagger.v3.oas.annotations.security.*
 import javax.validation.Valid
 import org.rucca.snake.worker.model.SubmitPost200ResponseDTO
-import org.rucca.snake.worker.model.SubmitPost400ResponseDTO
-import org.rucca.snake.worker.model.SubmitPost403ResponseDTO
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.validation.annotation.Validated
@@ -34,19 +32,7 @@ interface SubmitApi {
                     description = "Submission successful",
                     content =
                         [Content(schema = Schema(implementation = SubmitPost200ResponseDTO::class))],
-                ),
-                ApiResponse(
-                    responseCode = "400",
-                    description = "Bad request",
-                    content =
-                        [Content(schema = Schema(implementation = SubmitPost400ResponseDTO::class))],
-                ),
-                ApiResponse(
-                    responseCode = "403",
-                    description = "Submission rejected",
-                    content =
-                        [Content(schema = Schema(implementation = SubmitPost403ResponseDTO::class))],
-                ),
+                )
             ],
     )
     @RequestMapping(
@@ -58,8 +44,8 @@ interface SubmitApi {
     fun submitPost(
         @Parameter(description = "Source code file")
         @Valid
-        @RequestPart("src", required = false)
-        src: org.springframework.web.multipart.MultipartFile?
+        @RequestPart("src", required = true)
+        src: org.springframework.web.multipart.MultipartFile
     ): ResponseEntity<SubmitPost200ResponseDTO> {
         return ResponseEntity(HttpStatus.NOT_IMPLEMENTED)
     }
