@@ -51,6 +51,7 @@ class SubmitExecService(private val applicationConfig: ApplicationConfig) {
 
         return withContext(Dispatchers.IO) {
             val logFile = File(userDirectory, "nsjail.log")
+            logFile.deleteOnExit()
             logFile.createNewFile()
             val processBuilder =
                 ProcessBuilder(

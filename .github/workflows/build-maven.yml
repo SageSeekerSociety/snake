@@ -32,6 +32,34 @@ jobs:
           cp sample.env .env
           docker compose -f docker-compose.yml up -d
 
+      - name: Install nsjail
+        run: |
+          sudo apt-get -y update && sudo apt-get install -y \
+            libc6 \
+            libstdc++6 \
+            libprotobuf32 \
+            libnl-route-3-200 \
+            autoconf \
+            bison \
+            flex \
+            gcc \
+            g++ \
+            git \
+            libprotobuf-dev \
+            libnl-route-3-dev \
+            libtool \
+            make \
+            pkg-config \
+            protobuf-compiler
+          sudo git clone --depth 1 https://github.com/google/nsjail.git /usr/local/src/nsjail
+          cd /usr/local/src/nsjail
+          sudo make -j
+
+          # See: https://github.com/google/nsjail/issues/236
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_unconfined=0
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+
       - name: Build with Maven
         working-directory: ${{ matrix.project }}
         run: ./mvnw install
