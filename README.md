@@ -1,5 +1,7 @@
 # 中国人民大学蛇王争霸赛比赛系统
 
+[![Build Projects](https://github.com/SageSeekerSociety/snake/actions/workflows/build.yml/badge.svg)](https://github.com/SageSeekerSociety/snake/actions/workflows/build.yml)
+
 ## 部署方法
 本项目采用 docker compose 部署，首先需要安装 docker 和 docker-compose。
 
