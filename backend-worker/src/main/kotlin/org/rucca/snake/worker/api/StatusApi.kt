@@ -9,8 +9,7 @@ import io.swagger.v3.oas.annotations.enums.*
 import io.swagger.v3.oas.annotations.media.*
 import io.swagger.v3.oas.annotations.responses.*
 import io.swagger.v3.oas.annotations.security.*
-import javax.validation.Valid
-import org.rucca.snake.worker.model.SubmitPost200ResponseDTO
+import org.rucca.snake.worker.model.StatusGet200ResponseDTO
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.validation.annotation.Validated
@@ -18,35 +17,29 @@ import org.springframework.web.bind.annotation.*
 
 @RestController
 @Validated
-interface SubmitApi {
+interface StatusApi {
 
     @Operation(
         tags = ["default"],
-        summary = "Submit source code",
-        operationId = "submitPost",
+        summary = "Check service status",
+        operationId = "statusGet",
         description = """""",
         responses =
             [
                 ApiResponse(
                     responseCode = "200",
-                    description = "Submission successful",
+                    description = "OK",
                     content =
-                        [Content(schema = Schema(implementation = SubmitPost200ResponseDTO::class))],
+                        [Content(schema = Schema(implementation = StatusGet200ResponseDTO::class))],
                 )
             ],
     )
     @RequestMapping(
-        method = [RequestMethod.POST],
-        value = ["/submit"],
+        method = [RequestMethod.GET],
+        value = ["/status"],
         produces = ["application/json"],
-        consumes = ["multipart/form-data"],
     )
-    fun submitPost(
-        @Parameter(description = "Source code file")
-        @Valid
-        @RequestPart("src", required = true)
-        src: org.springframework.web.multipart.MultipartFile
-    ): ResponseEntity<SubmitPost200ResponseDTO> {
+    fun statusGet(): ResponseEntity<StatusGet200ResponseDTO> {
         return ResponseEntity(HttpStatus.NOT_IMPLEMENTED)
     }
 }
