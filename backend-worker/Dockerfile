@@ -1,4 +1,4 @@
-FROM openjdk:21-jdk-slim
+FROM openjdk:25-jdk-slim
 
 # Install dependencies and nsjail
 RUN apt-get update && apt-get upgrade -y && apt-get install -y \
