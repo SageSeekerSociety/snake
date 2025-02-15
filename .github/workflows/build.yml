@@ -30,8 +30,8 @@ jobs:
 
       - name: Start Dependencies
         run: |
-          cp sample.env .env
-          docker compose -f docker-compose.yml up -d
+          cp docker-compose-dependency/sample.env docker-compose-dependency/.env
+          docker compose -f docker-compose-dependency/docker-compose.yml up -d
 
       - name: Install nsjail
         run: |
@@ -88,7 +88,6 @@ jobs:
 
   build-docker:
     runs-on: ubuntu-latest
-
     needs: build-jar
 
     permissions:
@@ -133,9 +132,57 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: backend-worker
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           load: true
+
+  run-compose:
+    runs-on: ubuntu-latest
+    needs: build-docker
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set Environment Variables
+        run: |
+          echo "REGISTRY=ghcr.io" >> "$GITHUB_ENV"
+          echo "IMAGE_NAME=SageSeekerSociety/snake" >> "$GITHUB_ENV"
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Create env file
+        working-directory: docker-compose-deploy
+        run: cp sample.env .env
+      
+      - name: set cheese-auth image tag
+        run: echo "BACKEND_WORKER_TAG=${{ steps.meta.outputs.version }}" >> "$GITHUB_ENV"
+      
+      - name: Start compose
+        working-directory: docker-compose-deploy
+        run: |
+          docker compose --file docker-compose.yml up --no-build --detach
+
+          # Check the health of all services, wait for them to become healthy
+          max_tries=10
+          tries=0
+          until [ $(docker compose ps | grep -c 'healthy') -eq \
+              $(docker compose ps -q | wc -l) ] || [ $tries -eq $max_tries ]; do
+            echo "Waiting for all services to become healthy... (try $((tries+1))/$max_tries)"
+            sleep 5
+            tries=$((tries+1))
+          done
+
+          if [ $tries -eq $max_tries ]; then
+            echo "Services did not become healthy after $max_tries tries."
+            docker compose ps
+            docker compose exec -i backend-worker curl http://localhost:8081/status || false
+            docker compose logs backend-worker
+            exit 1
+          fi

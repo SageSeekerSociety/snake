@@ -1,11 +1,9 @@
 FROM openjdk:21-jdk-slim
 
-# Set the working directory
-WORKDIR /app
-
 # Install dependencies and nsjail
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
         clang \
+        curl \
         libc6 \
         libstdc++6 \
         libprotobuf32 \
@@ -46,12 +44,7 @@ WORKDIR /app
 # Copy the built jar file
 COPY target/snake.worker*.jar worker.jar
 
-# Create a user to run the application
-RUN useradd app && chown -R app /app
-USER app
-
 # Default value for environment variables
-ENV PORT=8080
 ENV JWT_SECRET=test-secret
 ENV WARN_AUDIT_FAILURE=true
 ENV COMPILER_PARAMETER=-std=c++17,-Wall,-Wextra,-Wshadow,-O2
