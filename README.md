@@ -8,7 +8,7 @@
 使用以下命令启动项目：
 ```shell
 git clone https://github.com/SageSeekerSociety/snake
-cd docker-compose-deploy
+cd snake/docker-compose-deploy
 cp sample.env .env
 docker compose up
 ```
