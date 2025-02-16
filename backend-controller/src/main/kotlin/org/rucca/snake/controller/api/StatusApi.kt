@@ -9,9 +9,7 @@ import io.swagger.v3.oas.annotations.enums.*
 import io.swagger.v3.oas.annotations.media.*
 import io.swagger.v3.oas.annotations.responses.*
 import io.swagger.v3.oas.annotations.security.*
-import javax.validation.Valid
-import org.rucca.snake.controller.model.ExecPost200ResponseDTO
-import org.rucca.snake.controller.model.ExecPostRequestDTO
+import org.rucca.snake.controller.model.StatusGet200ResponseDTO
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.validation.annotation.Validated
@@ -19,35 +17,29 @@ import org.springframework.web.bind.annotation.*
 
 @RestController
 @Validated
-interface ExecApi {
+interface StatusApi {
 
     @Operation(
         tags = ["default"],
-        summary = "Execute code in sandbox",
-        operationId = "execPost",
+        summary = "Check service status",
+        operationId = "statusGet",
         description = """""",
         responses =
             [
                 ApiResponse(
                     responseCode = "200",
-                    description = "Execution successful",
+                    description = "OK",
                     content =
-                        [Content(schema = Schema(implementation = ExecPost200ResponseDTO::class))],
+                        [Content(schema = Schema(implementation = StatusGet200ResponseDTO::class))],
                 )
             ],
     )
     @RequestMapping(
-        method = [RequestMethod.POST],
-        value = ["/exec"],
+        method = [RequestMethod.GET],
+        value = ["/status"],
         produces = ["application/json"],
-        consumes = ["application/json"],
     )
-    fun execPost(
-        @Parameter(description = "", required = true)
-        @Valid
-        @RequestBody
-        execPostRequestDTO: ExecPostRequestDTO
-    ): ResponseEntity<ExecPost200ResponseDTO> {
+    fun statusGet(): ResponseEntity<StatusGet200ResponseDTO> {
         return ResponseEntity(HttpStatus.NOT_IMPLEMENTED)
     }
 }
