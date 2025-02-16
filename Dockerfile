@@ -42,26 +42,29 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y \
 WORKDIR /app
 
 # Copy the built jar file
-COPY target/snake.worker*.jar worker.jar
+COPY backend-controller/target/snake.controller*.jar controller.jar
+COPY backend-worker/target/snake.worker*.jar worker.jar
 
 # Default value for environment variables
+ENV ROLE=worker
 ENV JWT_SECRET=test-secret
 ENV WARN_AUDIT_FAILURE=true
 ENV COMPILER_PARAMETER=-std=c++17,-Wall,-Wextra,-Wshadow,-O2
 ENV NSJAIL_PARAMETER=-M,o,-R,/lib,-R,/lib64,--disable_proc,--rlimit_cpu,1,--rlimit_as,300,--rlimit_nproc,0,--rlimit_fsize,0,--user,99999,--group,99999,--quiet
+ENV WORKER_URLS=http://localhost:8081
 
 # Expose the port the application runs on
 EXPOSE 8080
 
 # Command to run the application
-ENTRYPOINT [ \
-    "java", "-jar", "worker.jar", \
-    "--server.port=8080", \
-    "--cheese-auth.jwt-secret=${JWT_SECRET}", \
-    "--cheese-auth.warn-audit-failure=${WARN_AUDIT_FAILURE}", \
-    "--application.compiler-path=/bin/clang++", \
-    "--application.compiler-parameter=${COMPILER_PARAMETER}", \
-    "--application.data-directory=/app/data", \
-    "--application.nsjail-path=/usr/local/src/nsjail/nsjail", \
-    "--application.nsjail-parameter=${NSJAIL_PARAMETER}" \
-]
+ENTRYPOINT ["sh", "-c", "java -jar ${ROLE}.jar \
+    --server.port=8080 \
+    --cheese-auth.jwt-secret=${JWT_SECRET} \
+    --cheese-auth.warn-audit-failure=${WARN_AUDIT_FAILURE} \
+    --application.compiler-path=/bin/clang++ \
+    --application.compiler-parameter=${COMPILER_PARAMETER} \
+    --application.data-directory=/app/data \
+    --application.nsjail-path=/usr/local/src/nsjail/nsjail \
+    --application.nsjail-parameter=${NSJAIL_PARAMETER} \
+    --application.worker-urls=${WORKER_URLS} \
+"]

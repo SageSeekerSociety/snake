@@ -118,20 +118,30 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Download Jar
+      - name: Download Worker's Jar
         uses: actions/download-artifact@v4
         with:
           name: backend-worker-jar
 
-      - name: Move Jar
+      - name: Move Worker's Jar
         run: |
           mkdir backend-worker/target || true
           mv *.jar backend-worker/target/
+      
+      - name: Download Controller's Jar
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-controller-jar
+
+      - name: Move Controller's Jar
+        run: |
+          mkdir backend-controller/target || true
+          mv *.jar backend-controller/target/
 
       - name: Build
         uses: docker/build-push-action@v6
         with:
-          context: backend-worker
+          context: ${{ github.workspace }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
