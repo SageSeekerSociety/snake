@@ -5,15 +5,19 @@ import io.swagger.v3.oas.annotations.media.Schema
 import javax.validation.Valid
 
 /**
- * @param success
+ * @param code
+ * @param message
  * @param &#x60;data&#x60;
  */
 data class ExecPost200ResponseDTO(
-    @Schema(example = "null", description = "")
-    @get:JsonProperty("success")
-    val success: kotlin.Boolean? = null,
+    @Schema(example = "null", required = true, description = "")
+    @get:JsonProperty("code", required = true)
+    val code: kotlin.Int,
+    @Schema(example = "null", required = true, description = "")
+    @get:JsonProperty("message", required = true)
+    val message: kotlin.String,
     @field:Valid
-    @Schema(example = "null", description = "")
-    @get:JsonProperty("data")
-    val `data`: kotlin.collections.List<ExecPost200ResponseDataInnerDTO>? = null,
+    @Schema(example = "null", required = true, description = "")
+    @get:JsonProperty("data", required = true)
+    val `data`: kotlin.collections.List<ExecPost200ResponseDataInnerDTO>,
 ) {}

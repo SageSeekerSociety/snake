@@ -1,4 +1,22 @@
 services:
+  backend-worker:
+    image: ghcr.io/sageseekersociety/snake:${BACKEND_WORKER_TAG:-main}
+    env_file: .env
+    volumes:
+      - type: volume
+        source: backend_worker_data
+        target: /app/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/status"]
+      start_period: 180s
+      start_interval: 5s
+      interval: 1m
+      timeout: 10s
+      retries: 3
+    privileged: true
+    ports:
+      - "8081:8080"
+
   cheese-auth:
     image: ghcr.io/sageseekersociety/cheese-auth:${CHEESE_AUTH_TAG:-main}
     env_file: .env
@@ -10,14 +28,14 @@ services:
       cheese-auth-database:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:${PORT}/status || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/status || exit 1"]
       start_period: 180s
       start_interval: 5s
       interval: 1m
       timeout: 10s
       retries: 3
     ports:
-      - "${PORT}:${PORT}"
+      - "8080:8080"
 
   cheese-auth-database:
     image: postgres:16.2
@@ -37,5 +55,6 @@ services:
       - "5432:5432"
   
 volumes:
+  backend_worker_data:
   cheese_auth_uploads:
   cheese_auth_db_pg:

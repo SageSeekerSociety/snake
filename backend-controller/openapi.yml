@@ -3,61 +3,6 @@ info:
   title: API
   version: 1.0.0
 paths:
-  /exec:
-    post:
-      summary: Execute code in sandbox
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                uid:
-                  type: array
-                  items:
-                    type: string
-                  description: Array of user IDs
-                input:
-                  type: string
-                  description: Input for the execution
-      responses:
-        '200':
-          description: Execution successful
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                  data:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        sid:
-                          type: string
-                        output:
-                          type: string
-                          nullable: true
-                        result:
-                          type: object
-                          nullable: true
-                        error:
-                          type: string
-                          nullable: true
-        '400':
-          description: Bad request
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                  error:
-                    type: string
   /submit:
     post:
       summary: Submit source code
@@ -67,6 +12,8 @@ paths:
           multipart/form-data:
             schema:
               type: object
+              required:
+                - src
               properties:
                 src:
                   type: string
@@ -79,36 +26,96 @@ paths:
             application/json:
               schema:
                 type: object
+                required:
+                  - code
+                  - message
+                  - data
                 properties:
-                  error:
+                  code:
+                    type: integer
+                  message:
                     type: string
-                    nullable: true
-                  compile:
+                  data:
                     type: object
+                    required:
+                      - success
+                      - diagnose
                     properties:
                       success:
                         type: boolean
                       diagnose:
                         type: string
-        '400':
-          description: Bad request
+  /exec:
+    post:
+      summary: Execute code in sandbox
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - userIds
+                - input
+              properties:
+                userIds:
+                  type: array
+                  items:
+                    type: integer
+                    format: int64
+                  description: Array of user IDs
+                input:
+                  type: string
+                  description: Input for the execution
+      responses:
+        '200':
+          description: Execution successful
           content:
             application/json:
               schema:
                 type: object
+                required:
+                  - code
+                  - message
+                  - data
                 properties:
-                  error:
+                  code:
+                    type: integer
+                  message:
                     type: string
-                  compile:
-                    type: object
-                    nullable: true
-        '403':
-          description: Submission rejected
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - userId
+                        - output
+                        - sandbox
+                      properties:
+                        userId:
+                          type: integer
+                          format: int64
+                        output:
+                          type: string
+                        sandbox:
+                          type: string
+                        error:
+                          type: object
+  /status:
+    get:
+      summary: Check service status
+      responses:
+        '200':
+          description: OK
           content:
             application/json:
               schema:
                 type: object
+                required:
+                  - code
+                  - message
                 properties:
-                  error:
+                  code:
+                    type: integer
+                  message:
                     type: string
-                    example: Submission Rejected
