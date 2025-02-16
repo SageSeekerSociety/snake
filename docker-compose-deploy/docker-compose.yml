@@ -4,14 +4,14 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf
     ports:
-      - ${PORT}:8080
+      - ${FINAL_PORT}:80
     depends_on:
       backend-worker:
         condition: service_healthy
       cheese-auth:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/cheese-auth/status && curl -f http://localhost:8080/api/sandbox/status"]
+      test: ["CMD-SHELL", "curl -f http://localhost/api/cheese-auth/status && curl -f http://localhost/api/sandbox/status"]
       start_period: 180s
       start_interval: 5s
       interval: 1m
@@ -25,8 +25,6 @@ services:
       - type: volume
         source: backend_worker_data
         target: /app/data
-    environment:
-      - PORT=8080
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/status"]
       start_period: 180s
@@ -43,8 +41,6 @@ services:
       - type: volume
         source: cheese_auth_uploads
         target: /app/uploads
-    environment:
-      - PORT=8080
     depends_on:
       cheese-auth-database:
         condition: service_healthy
