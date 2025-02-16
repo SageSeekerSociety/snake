@@ -51,12 +51,12 @@ ENV COMPILER_PARAMETER=-std=c++17,-Wall,-Wextra,-Wshadow,-O2
 ENV NSJAIL_PARAMETER=-M,o,-R,/lib,-R,/lib64,--disable_proc,--rlimit_cpu,1,--rlimit_as,300,--rlimit_nproc,0,--rlimit_fsize,0,--user,99999,--group,99999,--quiet
 
 # Expose the port the application runs on
-EXPOSE ${PORT}
+EXPOSE 8080
 
 # Command to run the application
 ENTRYPOINT [ \
     "java", "-jar", "worker.jar", \
-    "--server.port=${PORT}", \
+    "--server.port=8080", \
     "--cheese-auth.jwt-secret=${JWT_SECRET}", \
     "--cheese-auth.warn-audit-failure=${WARN_AUDIT_FAILURE}", \
     "--application.compiler-path=/bin/clang++", \

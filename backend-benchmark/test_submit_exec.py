@@ -3,40 +3,39 @@ import json
 import sys
 
 
-def login_user(auth_base_url, username, password):
-    url = f"{auth_base_url}/users/auth/login"
+def login_user(base_url, username, password):
+    url = f"{base_url}/api/cheese-auth/users/auth/login"
     payload = {"username": username, "password": password}
     headers = {"Content-Type": "application/json"}
     response = requests.post(url, json=payload, headers=headers)
-    print(response.json())
+    # print(response.json())
     return response.json()["data"]["accessToken"], response.json()["data"]["user"]["id"]
 
 
 def submit_code(base_url, token, src):
-    url = f"{base_url}/submit"
+    url = f"{base_url}/api/sandbox/submit"
     files = {"src": ("code.cpp", src)}
     headers = {"Authorization": f"Bearer {token}"}
     response = requests.post(url, files=files, headers=headers)
-    print(response.json())
+    # print(response.json())
     return response.json()
 
 
 def exec_code(base_url, token, user_ids, input_data):
-    url = f"{base_url}/exec"
+    url = f"{base_url}/api/sandbox/exec"
     payload = {"userIds": user_ids, "input": input_data}
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
     response = requests.post(url, json=payload, headers=headers)
-    print(response.json())
+    # print(response.json())
     return response.json()
 
 
 def main():
-    auth_base_url = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8080"
-    base_url = sys.argv[2] if len(sys.argv) > 2 else "http://localhost:8081"
+    base_url = sys.argv[1] if len(sys.argv) > 1 else "http://localhost"
     username = input("Enter username: ")
     password = input("Enter password: ")
 
-    token, user_id = login_user(auth_base_url, username, password)
+    token, user_id = login_user(base_url, username, password)
 
     # Test submit with error
     src_with_error = """
