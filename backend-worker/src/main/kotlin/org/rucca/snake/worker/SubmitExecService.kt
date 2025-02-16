@@ -50,33 +50,35 @@ class SubmitExecService(private val applicationConfig: ApplicationConfig) {
             )
 
         return withContext(Dispatchers.IO) {
-            val logFile = File(userDirectory, "nsjail.log")
-            logFile.deleteOnExit()
-            logFile.createNewFile()
-            val processBuilder =
-                ProcessBuilder(
-                    listOf(
-                        applicationConfig.nsjailPath,
-                        *applicationConfig.nsjailParameter.toTypedArray(),
-                        "--chroot",
-                        userDirectory.absolutePath,
-                        "--log",
-                        logFile.absolutePath,
-                        "--",
-                        "/program",
+            val logFile = File.createTempFile("nsjail", ".log", userDirectory)
+            try {
+                val processBuilder =
+                    ProcessBuilder(
+                        listOf(
+                            applicationConfig.nsjailPath,
+                            *applicationConfig.nsjailParameter.toTypedArray(),
+                            "--chroot",
+                            userDirectory.absolutePath,
+                            "--log",
+                            logFile.absolutePath,
+                            "--",
+                            "/program",
+                        )
                     )
+                processBuilder.redirectErrorStream(true)
+                val process = processBuilder.start()
+                val output = process.inputStream.bufferedReader().use { it.readText() }
+                val sandbox = logFile.readLines().joinToString("\n")
+                val exitCode = process.waitFor()
+                ExecPost200ResponseDataInnerDTO(
+                    userId = userId,
+                    output = output,
+                    sandbox = sandbox,
+                    if (exitCode == 0) null else ExecutionError(exitCode),
                 )
-            processBuilder.redirectErrorStream(true)
-            val process = processBuilder.start()
-            val output = process.inputStream.bufferedReader().use { it.readText() }
-            val sandbox = logFile.readLines().joinToString("\n")
-            val exitCode = process.waitFor()
-            ExecPost200ResponseDataInnerDTO(
-                userId = userId,
-                output = output,
-                sandbox = sandbox,
-                if (exitCode == 0) null else ExecutionError(exitCode),
-            )
+            } finally {
+                logFile.delete()
+            }
         }
     }
 
