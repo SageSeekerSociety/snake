@@ -16,9 +16,9 @@ docker compose up
 注意，在生产环境中部署前必须要修改 `.env` 文件中的 `JWT_SECRET` 和 `DB_PASSWORD` 为随机字符串。这是至关重要的，否则会导致安全问题。
 此外，您需要正确设置`EMAIL_*`相关的环境变量，以便系统能够发送邮件。
 
-启动后各个服务的端口如下：
-| 服务 | 端口 |
+启动后各个服务的路径如下：
+| 服务 | 路径 |
 | --- | --- |
-| Cheese Auth Server | 8080 |
-| Backend Worker | 8081 |
+| Cheese Auth Server | /api/cheese-auth |
+| Sandbox Server | /api/sandbox |
 
