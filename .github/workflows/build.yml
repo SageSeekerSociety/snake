@@ -176,7 +176,9 @@ jobs:
         run: cp sample.env .env
       
       - name: set cheese-auth image tag
-        run: echo "BACKEND_WORKER_TAG=${{ steps.meta.outputs.version }}" >> "$GITHUB_ENV"
+        run: |
+          echo "BACKEND_WORKER_TAG=${{ steps.meta.outputs.version }}" >> "$GITHUB_ENV"
+          echo "BACKEND_CONTROLLER_TAG=${{ steps.meta.outputs.version }}" >> "$GITHUB_ENV"
       
       - name: Start compose
         working-directory: docker-compose-deploy-${{ matrix.type }}
