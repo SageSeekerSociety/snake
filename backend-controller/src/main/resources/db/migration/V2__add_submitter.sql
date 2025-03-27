@@ -1,6 +1,6 @@
 -- V2__add_submitter.sql
 
-CREATE SEQUENCE submitter_seq;
+CREATE SEQUENCE submitter_seq INCREMENT BY 50;
 
 CREATE TABLE submitter
 (
