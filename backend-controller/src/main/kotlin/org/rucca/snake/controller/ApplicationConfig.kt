@@ -16,4 +16,10 @@ import org.springframework.stereotype.Component
 @ConfigurationProperties(prefix = "application")
 class ApplicationConfig {
     lateinit var workerUrls: List<String>
+
+    var cors: CorsConfig = CorsConfig()
+
+    class CorsConfig {
+        lateinit var allowedOrigins: List<String>
+    }
 }
