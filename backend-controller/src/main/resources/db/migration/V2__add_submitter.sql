@@ -1,10 +1,10 @@
 -- V2__add_submitter.sql
 
-CREATE SEQUENCE submitter_id_seq;
+CREATE SEQUENCE submitter_seq;
 
 CREATE TABLE submitter
 (
-    id         BIGINT                      NOT NULL DEFAULT nextval('submitter_id_seq'),
+    id         BIGINT                      NOT NULL DEFAULT nextval('submitter_seq'),
     created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
     updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
     deleted_at TIMESTAMP WITHOUT TIME ZONE,
