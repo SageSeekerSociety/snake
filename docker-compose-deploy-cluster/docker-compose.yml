@@ -11,7 +11,11 @@ services:
       cheese-auth:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost/api/cheese-auth/status && curl -f http://localhost/api/sandbox/status"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -f http://localhost/api/cheese-auth/status && curl -f http://localhost/api/sandbox/status",
+        ]
       start_period: 180s
       start_interval: 5s
       interval: 1m
@@ -25,11 +29,7 @@ services:
       - ROLE=controller
       - WORKER_URLS=http://backend-worker-1:8080,http://backend-worker-2:8080,http://backend-worker-3:8080
     depends_on:
-      backend-worker-1:
-        condition: service_healthy
-      backend-worker-2:
-        condition: service_healthy
-      backend-worker-3:
+      cheese-auth:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/status"]
@@ -48,6 +48,9 @@ services:
         target: /app/data
     environment:
       - ROLE=worker
+    depends_on:
+      backend-controller:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/status"]
       start_period: 180s
@@ -66,6 +69,9 @@ services:
         target: /app/data
     environment:
       - ROLE=worker
+    depends_on:
+      backend-controller:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/status"]
       start_period: 180s
@@ -84,6 +90,9 @@ services:
         target: /app/data
     environment:
       - ROLE=worker
+    depends_on:
+      backend-controller:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/status"]
       start_period: 180s
@@ -125,7 +134,7 @@ services:
       interval: 1m
       timeout: 10s
       retries: 3
-  
+
 volumes:
   backend_worker_data_1:
   backend_worker_data_2:
