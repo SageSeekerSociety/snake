@@ -55,6 +55,17 @@ constructor(private val mockMvc: MockMvc, private val userCreatorService: UserCr
     }
 
     @Test
+    @Order(15)
+    fun testGetSubmitters1() {
+        val request =
+            MockMvcRequestBuilders.get("/submitters").header("Authorization", "Bearer $token")
+        mockMvc
+            .perform(request)
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.data.users[?(@.id==${user.userId})]").isEmpty)
+    }
+
+    @Test
     @Order(20)
     fun testSubmit1WithWarning() {
         val src =
@@ -101,6 +112,17 @@ constructor(private val mockMvc: MockMvc, private val userCreatorService: UserCr
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.data.success").value(true))
             .andExpect(jsonPath("$.data.diagnose").value(""))
+    }
+
+    @Test
+    @Order(35)
+    fun testGetSubmitters2() {
+        val request =
+            MockMvcRequestBuilders.get("/submitters").header("Authorization", "Bearer $token")
+        mockMvc
+            .perform(request)
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.data.users[?(@.id==${user.userId})]").isNotEmpty)
     }
 
     @Test
