@@ -22,6 +22,7 @@ components:
           example: "芝士"
         avatarId:
           type: integer
+          format: int64
           description: 头像 id
         intro:
           type: string

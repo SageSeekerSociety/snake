@@ -24,7 +24,7 @@ data class UserDTO(
     val nickname: kotlin.String,
     @Schema(example = "null", required = true, description = "头像 id")
     @get:JsonProperty("avatarId", required = true)
-    val avatarId: kotlin.Int,
+    val avatarId: kotlin.Long,
     @Schema(example = "null", required = true, description = "个人简介")
     @get:JsonProperty("intro", required = true)
     val intro: kotlin.String = "This user has not set an introduction yet.",

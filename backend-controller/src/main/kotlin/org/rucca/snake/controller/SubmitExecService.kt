@@ -10,6 +10,7 @@ import org.rucca.snake.controller.model.ExecPost200ResponseDTO
 import org.rucca.snake.controller.model.ExecPost200ResponseDataInnerDTO
 import org.rucca.snake.controller.model.ExecPostRequestDTO
 import org.rucca.snake.controller.model.SubmitPost200ResponseDTO
+import org.rucca.snake.controller.model.UserDTO
 import org.springframework.core.io.FileSystemResource
 import org.springframework.http.HttpEntity
 import org.springframework.http.HttpHeaders
@@ -25,6 +26,9 @@ import org.springframework.web.multipart.MultipartFile
 class SubmitExecService(
     private val applicationConfig: ApplicationConfig,
     private val authenticationService: AuthenticationService,
+    private val userService: UserService,
+    private val submitterRepository: SubmitterRepository,
+    private val userRepository: UserRepository,
 ) {
     private fun getWorkerUrl(userId: IdType): String {
         return applicationConfig.workerUrls[userId.toInt() % applicationConfig.workerUrls.size]
@@ -52,6 +56,7 @@ class SubmitExecService(
                     httpEntity,
                     SubmitPost200ResponseDTO::class.java,
                 )
+            if (response.body!!.data.success) upsertSubmitter(userId)
             Pair(response.body!!.data.success, response.body!!.data.diagnose)
         } catch (e: HttpStatusCodeException) {
             throw BypassedError(e.statusCode, objectMapper.readTree(e.responseBodyAsString))
@@ -93,5 +98,19 @@ class SubmitExecService(
                 }
             deferredResults.awaitAll().flatten()
         }
+    }
+
+    private fun upsertSubmitter(userId: IdType) {
+        val submitter = submitterRepository.findById(userId)
+        if (submitter.isEmpty) {
+            submitterRepository.save(
+                Submitter(user = userRepository.getReferenceById(userId.toInt()))
+            )
+        }
+    }
+
+    fun getSubmitters(): List<UserDTO> {
+        val submitterIds = submitterRepository.findAll().map { it.user!! }
+        return userService.convertUsersToDto(submitterIds).values.toList()
     }
 }

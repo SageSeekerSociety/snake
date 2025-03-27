@@ -30,14 +30,14 @@
  *
  */
 
-package org.rucca.cheese.auth.user
+package org.rucca.snake.controller
 
 import jakarta.persistence.*
 import java.time.OffsetDateTime
-import java.util.Optional
 import org.hibernate.annotations.ColumnDefault
 import org.hibernate.annotations.SQLRestriction
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.stereotype.Repository
 
 @Entity
 @Table(name = "avatar")
@@ -91,6 +91,7 @@ open class UserProfile {
     open var avatar: Avatar? = null
 }
 
+@Repository
 interface UserProfileRepository : JpaRepository<UserProfile, Int> {
-    fun findByUserId(userId: Int): Optional<UserProfile>
+    fun findAllByUserIdIn(userIds: List<Int>): List<UserProfile>
 }

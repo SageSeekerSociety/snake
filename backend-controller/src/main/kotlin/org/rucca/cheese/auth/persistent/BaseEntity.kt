@@ -14,10 +14,6 @@ import java.time.LocalDateTime
 import org.hibernate.annotations.CreationTimestamp
 import org.hibernate.annotations.UpdateTimestamp
 
-typealias IdType = Long
-
-typealias IdGetter = () -> IdType
-
 /*
  * A base entity that provides common fields for all entities,
  * and enables soft deletion.
@@ -40,7 +36,9 @@ abstract class BaseEntity(
     @Id
     @GeneratedValue(strategy = GenerationType.SEQUENCE)
     var id: IdType? = null,
-    @Column(nullable = false) @CreationTimestamp val createdAt: LocalDateTime? = null,
-    @Column(nullable = false) @UpdateTimestamp val updatedAt: LocalDateTime? = null,
-    var deletedAt: LocalDateTime? = null, // nullable
+    @Column(nullable = false, updatable = false)
+    @CreationTimestamp
+    val createdAt: LocalDateTime = LocalDateTime.now(),
+    @Column(nullable = false) @UpdateTimestamp val updatedAt: LocalDateTime = LocalDateTime.now(),
+    var deletedAt: LocalDateTime? = null,
 )
