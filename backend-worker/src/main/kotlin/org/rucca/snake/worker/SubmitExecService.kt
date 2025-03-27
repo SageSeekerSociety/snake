@@ -8,11 +8,14 @@ import org.rucca.cheese.auth.persistent.IdType
 import org.rucca.snake.worker.error.ExecutionError
 import org.rucca.snake.worker.error.ProgramNotFoundError
 import org.rucca.snake.worker.model.ExecPost200ResponseDataInnerDTO
+import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.web.multipart.MultipartFile
 
 @Service
 class SubmitExecService(private val applicationConfig: ApplicationConfig) {
+    private val logger = LoggerFactory.getLogger(SubmitExecService::class.java)
+
     fun submit(userId: IdType, src: MultipartFile): Pair<Boolean, String> {
         val userDirectory = File("${applicationConfig.dataDirectory}/$userId")
         if (!userDirectory.exists()) userDirectory.mkdirs()
@@ -51,7 +54,10 @@ class SubmitExecService(private val applicationConfig: ApplicationConfig) {
 
         return withContext(Dispatchers.IO) {
             val logFile = File.createTempFile("nsjail", ".log", userDirectory)
+            val inputFile = File.createTempFile("input", ".txt", userDirectory)
             try {
+                inputFile.writeText(input)
+
                 val processBuilder =
                     ProcessBuilder(
                         listOf(
@@ -62,10 +68,12 @@ class SubmitExecService(private val applicationConfig: ApplicationConfig) {
                             "--log",
                             logFile.absolutePath,
                             "--",
-                            "/program",
+                            "./program",
                         )
                     )
                 processBuilder.redirectErrorStream(true)
+                processBuilder.directory(userDirectory)
+                processBuilder.redirectInput(inputFile)
                 val process = processBuilder.start()
                 val output = process.inputStream.bufferedReader().use { it.readText() }
                 val sandbox = logFile.readLines().joinToString("\n")
@@ -78,6 +86,7 @@ class SubmitExecService(private val applicationConfig: ApplicationConfig) {
                 )
             } finally {
                 logFile.delete()
+                inputFile.delete()
             }
         }
     }
