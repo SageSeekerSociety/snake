@@ -68,7 +68,7 @@ class UserCreatorService(
     /** @return JWT token */
     fun login(username: String, password: String): String {
         val client = ClientBuilder.newClient()
-        val target = client.target(authConfig.authServerUrl).path("/users/auth/login")
+        val target = client.target(authConfig.authServerUrl.trim()).path("/users/auth/login")
         val request =
             """
             {

@@ -21,4 +21,10 @@ class ApplicationConfig {
 
     lateinit var nsjailPath: String
     lateinit var nsjailParameter: List<String>
+
+    var cors: CorsConfig = CorsConfig()
+
+    class CorsConfig {
+        lateinit var allowedOrigins: List<String>
+    }
 }
