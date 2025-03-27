@@ -2,6 +2,38 @@ openapi: 3.0.0
 info:
   title: API
   version: 1.0.0
+components:
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: 用户 ID
+          minimum: 1
+        username:
+          type: string
+          description: 用户名
+          example: "cheese"
+        nickname:
+          type: string
+          description: 昵称
+          example: "芝士"
+        avatarId:
+          type: integer
+          format: int64
+          description: 头像 id
+        intro:
+          type: string
+          description: 个人简介
+          default: "This user has not set an introduction yet."
+      required:
+        - id
+        - username
+        - nickname
+        - avatarId
+        - intro
 paths:
   /submit:
     post:
@@ -119,3 +151,31 @@ paths:
                     type: integer
                   message:
                     type: string
+  /submitters:
+    get:
+      summary: Get all submitters
+      responses:
+        '200':
+          description: Successfully retrieved all submitters
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      users:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/User'
+                    required:
+                      - users

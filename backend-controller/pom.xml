@@ -135,6 +135,14 @@
             <artifactId>kotlinx-coroutines-core</artifactId>
             <version>1.10.1</version>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+        </dependency>
     </dependencies>
 
     <build>
@@ -268,6 +276,7 @@
                 <version>3.5.2</version>
                 <configuration>
                     <systemPropertyVariables>
+                        <spring.jpa.hibernate.ddl-auto>update</spring.jpa.hibernate.ddl-auto>
                         <logging.level.root>WARN</logging.level.root>
                     </systemPropertyVariables>
                     <argLine>${argLine} -XX:+EnableDynamicAgentLoading</argLine>

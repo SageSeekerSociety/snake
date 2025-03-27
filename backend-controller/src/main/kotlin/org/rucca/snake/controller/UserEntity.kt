@@ -30,13 +30,14 @@
  *
  */
 
-package org.rucca.cheese.auth.user
+package org.rucca.snake.controller
 
 import jakarta.persistence.*
 import java.time.OffsetDateTime
 import org.hibernate.annotations.ColumnDefault
 import org.hibernate.annotations.SQLRestriction
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.stereotype.Repository
 
 @Entity
 @Table(
@@ -59,7 +60,7 @@ open class User {
     @Column(name = "username", nullable = false, length = Integer.MAX_VALUE)
     open var username: String? = null
 
-    @Column(name = "hashed_password", nullable = false, length = Integer.MAX_VALUE)
+    @Column(name = "hashed_password", nullable = true, length = Integer.MAX_VALUE)
     open var hashedPassword: String? = null
 
     @Column(name = "email", nullable = false, length = Integer.MAX_VALUE)
@@ -76,4 +77,4 @@ open class User {
     @Column(name = "deleted_at") open var deletedAt: OffsetDateTime? = null
 }
 
-interface UserRepository : JpaRepository<User, Int>
+@Repository interface UserRepository : JpaRepository<User, Int> {}
