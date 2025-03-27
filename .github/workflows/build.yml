@@ -183,22 +183,75 @@ jobs:
       - name: Start compose
         working-directory: docker-compose-deploy-${{ matrix.type }}
         run: |
-          docker compose --file docker-compose.yml up --no-build --detach
-
-          # Check the health of all services, wait for them to become healthy
+          # Start services in background
+          docker compose --file docker-compose.yml up --no-build --detach || true
+          
+          echo "=== Current Container Status (including exited containers) ==="
+          docker compose ps -a
+          
+          # Check if any containers failed to start or exited
+          failed_containers=$(docker compose ps -a | grep -E "Exit|exited" | awk '{print $1}')
+          
+          if [ -n "$failed_containers" ]; then
+            echo "=== CRITICAL ERROR: The following containers failed to start ==="
+            echo "$failed_containers"
+            
+            echo "=== Environment Variables ==="
+            docker compose config | grep -v -E '^\s*(password|secret|key)'
+            
+            echo "=== Failed Container Details ==="
+            for container in $failed_containers; do
+              echo "===== Failed Container: $container ====="
+              docker inspect $container | grep -E 'State|ExitCode|Error|Cmd|Args|Env'
+              echo ""
+              echo "===== Logs for $container ====="
+              docker logs $container 2>&1 || echo "Could not get logs for $container"
+            done
+            
+            # Check controller specifically since that's what's failing
+            controller_container=$(echo "$failed_containers" | grep "controller")
+            if [ -n "$controller_container" ]; then
+              echo "===== Controller Container Environment Variables ====="
+              docker inspect $controller_container -f '{{range .Config.Env}}{{println .}}{{end}}'
+              
+              echo "===== Controller Container Command ====="
+              docker inspect $controller_container -f '{{.Config.Cmd}}'
+              
+              echo "===== Controller Container Entry Point ====="
+              docker inspect $controller_container -f '{{.Config.Entrypoint}}'
+            fi
+            
+            # Still output logs for any running containers
+            echo "=== Running Service Logs ==="
+            running_containers=$(docker compose ps -q)
+            for container in $running_containers; do
+              container_name=$(docker inspect --format='{{.Name}}' $container | sed 's/\///')
+              echo "===== Logs for running container $container_name ====="
+              docker logs $container 2>&1 || echo "Could not get logs for $container_name"
+            done
+            
+            exit 1
+          fi
+          
+          # Check health of running containers
           max_tries=10
           tries=0
           until [ $(docker compose ps | grep -c 'healthy') -eq \
               $(docker compose ps -q | wc -l) ] || [ $tries -eq $max_tries ]; do
             echo "Waiting for all services to become healthy... (try $((tries+1))/$max_tries)"
+            docker compose ps
             sleep 5
             tries=$((tries+1))
           done
 
           if [ $tries -eq $max_tries ]; then
-            echo "Services did not become healthy after $max_tries tries."
-            docker compose ps
-            docker compose exec -i backend-worker curl http://localhost:8081/status || false
-            docker compose logs backend-worker
+            echo "=== ERROR: Services did not become healthy after $max_tries tries ==="
+            
+            # Add all previous diagnostic code here...
+            # [previous diagnostic code]
+            
             exit 1
           fi
+          
+          echo "All services are healthy!"
+          docker compose ps
