@@ -52,7 +52,7 @@ jobs:
             make \
             pkg-config \
             protobuf-compiler
-          sudo git clone --depth 1 https://github.com/google/nsjail.git /usr/local/src/nsjail
+          sudo git clone --depth 1 https://github.com/SageSeekerSociety/nsjail.git /usr/local/src/nsjail
           cd /usr/local/src/nsjail
           sudo make -j
 
@@ -127,7 +127,7 @@ jobs:
         run: |
           mkdir backend-worker/target || true
           mv *.jar backend-worker/target/
-      
+
       - name: Download Controller's Jar
         uses: actions/download-artifact@v4
         with:
@@ -156,7 +156,7 @@ jobs:
     strategy:
       matrix:
         type: ["standalone", "cluster"]
-    
+
     steps:
       - uses: actions/checkout@v4
 
@@ -174,24 +174,24 @@ jobs:
       - name: Create env file
         working-directory: docker-compose-deploy-${{ matrix.type }}
         run: cp sample.env .env
-      
+
       - name: set cheese-auth image tag
         run: |
           echo "BACKEND_WORKER_TAG=${{ steps.meta.outputs.version }}" >> "$GITHUB_ENV"
           echo "BACKEND_CONTROLLER_TAG=${{ steps.meta.outputs.version }}" >> "$GITHUB_ENV"
-      
+
       - name: Start compose
         working-directory: docker-compose-deploy-${{ matrix.type }}
         run: |
           # Start services in background
           docker compose --file docker-compose.yml up --no-build --detach || true
-          
+
           echo "=== Current Container Status (including exited containers) ==="
           docker compose ps -a
-          
+
           # Check if any containers failed to start or exited
           failed_containers=$(docker compose ps -a | grep -E "Exit|exited" | awk '{print $1}')
-          
+
           if [ -n "$failed_containers" ]; then
             echo "=== CRITICAL ERROR: The following containers failed to start ==="
             echo "$failed_containers"
@@ -232,7 +232,7 @@ jobs:
             
             exit 1
           fi
-          
+
           # Check health of running containers
           max_tries=10
           tries=0
@@ -252,6 +252,6 @@ jobs:
             
             exit 1
           fi
-          
+
           echo "All services are healthy!"
           docker compose ps
