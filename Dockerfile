@@ -20,7 +20,7 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y \
         make \
         pkg-config \
         protobuf-compiler && \
-    git clone --depth 1 https://github.com/google/nsjail.git /usr/local/src/nsjail && \
+    git clone --depth 1 https://github.com/SageSeekerSociety/nsjail.git /usr/local/src/nsjail && \
     cd /usr/local/src/nsjail && \
     make -j && \
     apt-get autoremove -y \
