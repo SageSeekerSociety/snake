@@ -1,7 +1,7 @@
 package org.rucca.snake.controller.api
 
+import jakarta.servlet.http.HttpServletResponse
 import java.io.IOException
-import javax.servlet.http.HttpServletResponse
 import org.springframework.web.context.request.NativeWebRequest
 
 object ApiUtil {

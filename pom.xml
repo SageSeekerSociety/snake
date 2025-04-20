@@ -1,0 +1,307 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <!-- 使用 Spring Boot Parent 来管理大部分依赖版本 -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.4.4</version> <!-- 保持和子模块一致 -->
+        <relativePath/> <!-- lookup parent from repository -->
+    </parent>
+
+    <!-- 项目基本信息 -->
+    <groupId>org.rucca</groupId>
+    <artifactId>snake</artifactId> <!-- 父项目的 artifactId -->
+    <version>0.0.1-SNAPSHOT</version>
+    <packaging>pom</packaging> <!-- 父项目必须是 pom packaging -->
+    <name>snake</name>
+    <description>Parent project for the snake game backend</description>
+
+    <properties>
+        <!-- 统一管理版本号 -->
+        <java.version>21</java.version>
+        <spring.boot.version>3.4.4</spring.boot.version> <!-- 确保统一 -->
+        <kotlin.version>2.1.10</kotlin.version> <!-- 确保统一 -->
+        <kotlinx-coroutines.version>1.10.1</kotlinx-coroutines.version>
+        <minio.version>8.5.17</minio.version> <!-- 统一 MinIO 版本 -->
+        <auth0-jwt.version>4.5.0</auth0-jwt.version>
+        <aspectj.version>1.9.23</aspectj.version>
+        <parboiled.version>1.4.1</parboiled.version>
+        <asm.version>9.7.1</asm.version>
+        <hypersistence.version>3.9.9</hypersistence.version>
+        <openapi-generator.version>7.11.0</openapi-generator.version>
+        <spotless.version>2.44.2</spotless.version>
+        <jacoco.version>0.8.12</jacoco.version>
+        <maven-surefire.version>3.5.2</maven-surefire.version>
+        <maven-antrun.version>3.1.0</maven-antrun.version>
+        <flyway.version>10.0.0</flyway.version> <!-- 统一 Flyway 版本 -->
+        <jakarta-annotation-api.version>3.0.0</jakarta-annotation-api.version>
+        <jakarta-validation-api.version>3.1.1</jakarta-validation-api.version>
+        <jakarta-servlet-api.version>6.1.0</jakarta-servlet-api.version>
+    </properties>
+
+    <!-- 定义子模块 -->
+    <modules>
+        <module>backend-common</module>
+        <module>backend-controller</module>
+        <module>backend-worker</module>
+    </modules>
+
+    <!-- 统一依赖管理 (子模块按需引用，无需指定版本) -->
+    <dependencyManagement>
+        <dependencies>
+            <!-- 内部模块 -->
+            <dependency>
+                <groupId>org.rucca</groupId>
+                <artifactId>snake.common</artifactId>
+                <version>${project.version}</version> <!-- 使用父项目版本 -->
+            </dependency>
+
+            <!-- 数据库相关 -->
+            <dependency>
+                <groupId>org.postgresql</groupId>
+                <artifactId>postgresql</artifactId>
+                <version>${postgresql.version}</version> <!-- spring-boot-parent 通常会管理 -->
+            </dependency>
+            <dependency>
+                <groupId>io.hypersistence</groupId>
+                <artifactId>hypersistence-utils-hibernate-63</artifactId>
+                <version>${hypersistence.version}</version>
+            </dependency>
+            <dependency>
+                 <groupId>org.flywaydb</groupId>
+                 <artifactId>flyway-core</artifactId>
+                 <version>${flyway.version}</version>
+            </dependency>
+            <dependency>
+                 <groupId>org.flywaydb</groupId>
+                 <artifactId>flyway-database-postgresql</artifactId>
+                 <version>${flyway.version}</version>
+            </dependency>
+
+
+            <!-- MinIO -->
+            <dependency>
+                <groupId>io.minio</groupId>
+                <artifactId>minio</artifactId>
+                <version>${minio.version}</version>
+            </dependency>
+
+            <!-- Kotlin Coroutines -->
+            <dependency>
+                <groupId>org.jetbrains.kotlinx</groupId>
+                <artifactId>kotlinx-coroutines-core</artifactId>
+                <version>${kotlinx-coroutines.version}</version> <!-- spring-boot-parent 管理 -->
+            </dependency>
+             <dependency>
+                 <groupId>org.jetbrains.kotlinx</groupId>
+                 <artifactId>kotlinx-coroutines-jdk8</artifactId>
+                 <version>${kotlinx-coroutines.version}</version>
+             </dependency>
+            <dependency>
+                 <groupId>org.jetbrains.kotlinx</groupId>
+                 <artifactId>kotlinx-coroutines-reactor</artifactId>
+                 <version>${kotlinx-coroutines.version}</version>
+            </dependency>
+
+            <!-- Auth 相关 (按需放入) -->
+            <dependency>
+                <groupId>org.aspectj</groupId>
+                <artifactId>aspectjweaver</artifactId>
+                <version>${aspectj.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.auth0</groupId>
+                <artifactId>java-jwt</artifactId>
+                <version>${auth0-jwt.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.parboiled</groupId>
+                <artifactId>parboiled-java</artifactId>
+                <version>${parboiled.version}</version>
+            </dependency>
+             <dependency>
+                 <groupId>org.ow2.asm</groupId>
+                 <artifactId>asm</artifactId>
+                 <version>${asm.version}</version>
+             </dependency>
+             <!-- Jakarta Annotations for @Generated -->
+            <dependency>
+                 <groupId>jakarta.annotation</groupId>
+                 <artifactId>jakarta.annotation-api</artifactId>
+                 <version>${jakarta-annotation-api.version}</version> <!-- spring-boot-parent 管理 -->
+             </dependency>
+            <!-- Jakarta Validation -->
+            <dependency>
+                 <groupId>jakarta.validation</groupId>
+                 <artifactId>jakarta.validation-api</artifactId>
+                  <version>${jakarta-validation-api.version}</version> <!-- spring-boot-parent 管理 -->
+            </dependency>
+            <!-- Servlet API (provided) -->
+             <dependency>
+                 <groupId>jakarta.servlet</groupId>
+                 <artifactId>jakarta.servlet-api</artifactId>
+                 <version>${jakarta-servlet-api.version}</version> <!-- spring-boot-parent 管理 -->
+                 <scope>provided</scope>
+             </dependency>
+
+             <!-- Swagger Annotations (如果共享 DTO 需要) -->
+            <dependency>
+                <groupId>io.swagger.core.v3</groupId>
+                <artifactId>swagger-annotations</artifactId>
+                <version>2.2.28</version> <!-- 确保版本一致 -->
+            </dependency>
+
+
+            <!-- 其他可能共享的库 -->
+
+        </dependencies>
+    </dependencyManagement>
+
+    <!-- 可以在这里定义通用的 build 配置，如 Kotlin 插件版本 -->
+    <build>
+        <pluginManagement>
+            <plugins>
+                <!-- Kotlin Plugin -->
+                <plugin>
+                    <groupId>org.jetbrains.kotlin</groupId>
+                    <artifactId>kotlin-maven-plugin</artifactId>
+                    <version>${kotlin.version}</version>
+                    <configuration>
+                        <jvmTarget>${java.version}</jvmTarget>
+                        <args>
+                            <arg>-Xjsr305=strict</arg>
+                        </args>
+                        <compilerPlugins>
+                            <plugin>spring</plugin>
+                            <plugin>jpa</plugin> <!-- 如果 common 模块有 JPA 实体 -->
+                        </compilerPlugins>
+                    </configuration>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.jetbrains.kotlin</groupId>
+                            <artifactId>kotlin-maven-allopen</artifactId>
+                            <version>${kotlin.version}</version>
+                        </dependency>
+                         <dependency> <!-- 如果 common 模块有 JPA 实体 -->
+                             <groupId>org.jetbrains.kotlin</groupId>
+                             <artifactId>kotlin-maven-noarg</artifactId>
+                             <version>${kotlin.version}</version>
+                         </dependency>
+                    </dependencies>
+                    <executions>
+                        <execution>
+                            <id>compile</id>
+                            <phase>compile</phase>
+                            <goals>
+                                <goal>compile</goal>
+                            </goals>
+                            <configuration>
+                                 <sourceDirs>
+                                    <sourceDir>${project.basedir}/src/main/kotlin</sourceDir>
+                                     <!-- 如果有 java 代码 <sourceDir>${project.basedir}/src/main/java</sourceDir> -->
+                                 </sourceDirs>
+                            </configuration>
+                        </execution>
+                        <execution>
+                            <id>test-compile</id>
+                            <phase>test-compile</phase>
+                            <goals>
+                                <goal>test-compile</goal>
+                            </goals>
+                             <configuration>
+                                 <sourceDirs>
+                                    <sourceDir>${project.basedir}/src/test/kotlin</sourceDir>
+                                     <!-- 如果有 java 代码 <sourceDir>${project.basedir}/src/test/java</sourceDir> -->
+                                 </sourceDirs>
+                             </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+
+                <!-- Spring Boot Maven Plugin (只在可执行模块中配置 execution) -->
+                 <plugin>
+                     <groupId>org.springframework.boot</groupId>
+                     <artifactId>spring-boot-maven-plugin</artifactId>
+                 </plugin>
+
+                <!-- Spotless Plugin -->
+                <plugin>
+                     <groupId>com.diffplug.spotless</groupId>
+                     <artifactId>spotless-maven-plugin</artifactId>
+                     <version>${spotless.version}</version>
+                     <configuration>
+                        <!-- 通用配置 -->
+                         <java><googleJavaFormat/></java>
+                         <kotlin><ktfmt><style>KOTLINLANG</style></ktfmt></kotlin>
+                         <pom><sortPom><nrOfIndentSpace>4</nrOfIndentSpace><expandEmptyElements>false</expandEmptyElements></sortPom></pom>
+                         <markdown><includes><include>**/*.md</include></includes></markdown>
+                     </configuration>
+                </plugin>
+
+                 <!-- Surefire Plugin -->
+                 <plugin>
+                     <groupId>org.apache.maven.plugins</groupId>
+                     <artifactId>maven-surefire-plugin</artifactId>
+                     <version>${maven-surefire.version}</version>
+                     <configuration>
+                         <systemPropertyVariables>
+                             <logging.level.root>WARN</logging.level.root>
+                         </systemPropertyVariables>
+                         <argLine>${argLine} -XX:+EnableDynamicAgentLoading</argLine>
+                     </configuration>
+                 </plugin>
+
+                 <!-- Jacoco Plugin -->
+                 <plugin>
+                     <groupId>org.jacoco</groupId>
+                     <artifactId>jacoco-maven-plugin</artifactId>
+                     <version>${jacoco.version}</version>
+                     <executions>
+                         <execution>
+                             <id>default-prepare-agent</id>
+                             <goals>
+                                 <goal>prepare-agent</goal>
+                             </goals>
+                         </execution>
+                         <execution>
+                             <id>default-report</id>
+                             <phase>verify</phase> <!-- Run report after tests -->
+                             <goals>
+                                 <goal>report</goal>
+                             </goals>
+                         </execution>
+                     </executions>
+                 </plugin>
+
+                <!-- OpenAPI Generator (在子模块中配置 execution) -->
+                <plugin>
+                     <groupId>org.openapitools</groupId>
+                     <artifactId>openapi-generator-maven-plugin</artifactId>
+                     <version>${openapi-generator.version}</version>
+                 </plugin>
+
+                 <!-- Antrun (在子模块中配置 execution) -->
+                 <plugin>
+                     <groupId>org.apache.maven.plugins</groupId>
+                     <artifactId>maven-antrun-plugin</artifactId>
+                     <version>${maven-antrun.version}</version>
+                 </plugin>
+
+                 <!-- Flyway (在 Controller 模块中配置 execution) -->
+                 <plugin>
+                      <groupId>org.flywaydb</groupId>
+                      <artifactId>flyway-maven-plugin</artifactId>
+                      <version>${flyway.version}</version>
+                 </plugin>
+
+            </plugins>
+        </pluginManagement>
+
+         <!-- 定义通用的 source 和 testSource 目录 -->
+         <sourceDirectory>${project.basedir}/src/main/kotlin</sourceDirectory>
+         <testSourceDirectory>${project.basedir}/src/test/kotlin</testSourceDirectory>
+    </build>
+
+</project>

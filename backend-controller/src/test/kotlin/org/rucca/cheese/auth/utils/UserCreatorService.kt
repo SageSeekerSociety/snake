@@ -16,7 +16,11 @@ import kotlin.math.floor
 import org.json.JSONObject
 import org.rucca.cheese.auth.config.AuthConfig
 import org.rucca.cheese.auth.persistent.IdType
-import org.rucca.snake.controller.*
+import org.rucca.snake.common.infra.persistence.entity.Avatar
+import org.rucca.snake.common.infra.persistence.entity.User
+import org.rucca.snake.common.infra.persistence.entity.UserProfile
+import org.rucca.snake.common.infra.persistence.repository.UserProfileRepository
+import org.rucca.snake.common.infra.persistence.repository.UserRepository
 import org.springframework.stereotype.Service
 
 @Service

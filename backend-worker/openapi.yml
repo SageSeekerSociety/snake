@@ -20,7 +20,7 @@ paths:
                   format: binary
                   description: Source code file
       responses:
-        '200':
+        "200":
           description: Submission successful
           content:
             application/json:
@@ -68,7 +68,7 @@ paths:
                   type: string
                   description: Input for the execution
       responses:
-        '200':
+        "200":
           description: Execution successful
           content:
             application/json:
@@ -99,13 +99,21 @@ paths:
                           type: string
                         sandbox:
                           type: string
+                        cpuTimeSeconds:
+                          type: number
+                          format: double
+                          description: CPU time consumed by the process in seconds.
+                        memoryKilobytes:
+                          type: integer
+                          format: int64
+                          description: Peak memory usage by the process in kilobytes.
                         error:
                           type: object
   /status:
     get:
       summary: Check service status
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:

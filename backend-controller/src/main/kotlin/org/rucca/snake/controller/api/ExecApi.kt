@@ -9,7 +9,7 @@ import io.swagger.v3.oas.annotations.enums.*
 import io.swagger.v3.oas.annotations.media.*
 import io.swagger.v3.oas.annotations.responses.*
 import io.swagger.v3.oas.annotations.security.*
-import javax.validation.Valid
+import jakarta.validation.Valid
 import org.rucca.snake.controller.model.ExecPost200ResponseDTO
 import org.rucca.snake.controller.model.ExecPostRequestDTO
 import org.springframework.http.HttpStatus

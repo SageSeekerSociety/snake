@@ -1,0 +1,64 @@
+spring:
+  application:
+    name: snake.controller
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:mydb}?currentSchema=${DB_SCHEMA:public}
+    username: ${DB_USERNAME:username}
+    password: ${DB_PASSWORD:mypassword}
+    driver-class-name: org.postgresql.Driver
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+  jpa:
+    show-sql: true
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    schemas: ${DB_SCHEMA:public}
+  web:
+    resources:
+      add-mappings: false
+
+server:
+  port: 8080
+
+cheese-auth:
+  jwt-secret: test-secret
+  warn-audit-failure: true
+  auth-server-url: ${CHEESE_AUTH_SERVER_URL:http://localhost:8080}
+
+application:
+  worker-urls: http://localhost:8081
+  cors:
+    allowed-origins:
+      - http://localhost:3000
+
+# --- AMQP (RabbitMQ) 配置 ---
+amqp:
+  queue:
+    compile: oj.compile.tasks    # 编译任务队列名
+    execute: oj.execute.tasks    # 执行任务队列名
+    # compile-dlq: oj.compile.tasks.dlq # (可选) 死信队列
+    # execute-dlq: oj.execute.tasks.dlq # (可选) 死信队列
+    # results: oj.results.notify        # (可选) 结果通知队列
+  exchange:
+    requests: oj.requests.exchange # 请求交换机
+    results: oj.results.exchange   # (可选) 结果交换机
+    # requests-dlx: oj.requests.exchange.dlx # (可选) 死信交换机
+  routingkey:
+    compile: task.compile         # 路由键
+    execute: task.execute         # 路由键
+    result: result.notify         # (可选) 结果路由键
+    # compile-dlq: task.compile.dlq # (可选) 死信路由键
+    # execute-dlq: task.execute.dlq # (可选) 死信路由键
+
+# --- MinIO 配置 ---
+minio:
+  endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+  accessKey: ${MINIO_ACCESS_KEY:minioadmin}
+  secretKey: ${MINIO_SECRET_KEY:minioadmin}
+  bucketName: ${MINIO_BUCKET_NAME:oj-programs}

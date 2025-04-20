@@ -16,7 +16,7 @@ import com.auth0.jwt.exceptions.JWTVerificationException
 import com.auth0.jwt.exceptions.TokenExpiredException
 import com.fasterxml.jackson.core.JacksonException
 import com.fasterxml.jackson.databind.ObjectMapper
-import javax.annotation.PostConstruct
+import jakarta.annotation.PostConstruct
 import org.rucca.cheese.auth.config.AuthConfig
 import org.rucca.cheese.auth.error.AuthenticationRequiredError
 import org.rucca.cheese.auth.error.InvalidTokenError
