@@ -48,9 +48,6 @@ services:
         target: /app/data
     environment:
       - ROLE=worker
-    depends_on:
-      backend-controller:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/status"]
       start_period: 180s
@@ -69,9 +66,6 @@ services:
         target: /app/data
     environment:
       - ROLE=worker
-    depends_on:
-      backend-controller:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/status"]
       start_period: 180s
@@ -90,9 +84,6 @@ services:
         target: /app/data
     environment:
       - ROLE=worker
-    depends_on:
-      backend-controller:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/status"]
       start_period: 180s
@@ -109,6 +100,7 @@ services:
       - type: volume
         source: cheese_auth_uploads
         target: /app/uploads
+      - ./plugins:/app/server/plugins
     depends_on:
       cheese-auth-database:
         condition: service_healthy

@@ -1,3 +1,4 @@
 .env
 cheese-auth.env
 backend-worker.env
+plugins/

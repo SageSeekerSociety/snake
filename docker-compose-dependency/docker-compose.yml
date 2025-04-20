@@ -1,29 +1,103 @@
 services:
+  rabbitmq:
+    image: rabbitmq:4-management
+    hostname: rabbitmq
+    env_file: .env
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    hostname: minio
+    env_file: .env
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
   backend-worker:
     image: ghcr.io/sageseekersociety/snake:${BACKEND_WORKER_TAG:-main}
     env_file: .env
+    cgroup: host
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      cheese-auth-database:
+        condition: service_healthy
+      backend-controller:
+        condition: service_healthy
     volumes:
       - type: volume
         source: backend_worker_data
         target: /app/data
+      - type: volume
+        source: backend_worker_cache
+        target: /app/cache
+      - ./application-worker.yml:/app/config/application.yml:ro
+    ports:
+      - "8082:8080"
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/status"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health"]
       start_period: 180s
       start_interval: 5s
       interval: 1m
       timeout: 10s
       retries: 3
     privileged: true
+
+  backend-controller:
+    image: ghcr.io/sageseekersociety/snake:${BACKEND_CONTROLLER_TAG:-main}
+    env_file: .env
+    environment:
+      - ROLE=controller
+      - WORKER_URLS=http://backend-worker:8080
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      cheese-auth-database:
+        condition: service_healthy
+    volumes:
+      - ./application-controller.yml:/app/config/application.yml:ro
     ports:
       - "8081:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health"]
+      start_period: 180s
+      start_interval: 5s
+      interval: 1m
+      timeout: 10s
+      retries: 3
 
   cheese-auth:
     image: ghcr.io/sageseekersociety/cheese-auth:${CHEESE_AUTH_TAG:-main}
     env_file: .env
+    environment:
+      - PORT=8080
     volumes:
       - type: volume
         source: cheese_auth_uploads
         target: /app/uploads
+      - ./plugins:/app/server/plugins
     depends_on:
       cheese-auth-database:
         condition: service_healthy
@@ -44,6 +118,7 @@ services:
       - type: volume
         source: cheese_auth_db_pg
         target: /var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       start_period: 180s
@@ -53,8 +128,11 @@ services:
       retries: 3
     ports:
       - "5432:5432"
-  
+
 volumes:
+  rabbitmq_data:
+  minio_data:
   backend_worker_data:
+  backend_worker_cache:
   cheese_auth_uploads:
   cheese_auth_db_pg:
