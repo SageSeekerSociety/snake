@@ -197,45 +197,10 @@ jobs:
             NSJAIL_REPO=${{ env.NSJAIL_REPO }}
             NSJAIL_BRANCH=${{ env.NSJAIL_REF }}
 
-  run-compose:
-    runs-on: ubuntu-latest
-    needs: build-docker
-
-    strategy:
-      matrix:
-        type: ["standalone", "cluster"]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Docker meta for Controller (to get consistent tag)
-        id: meta_controller
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/snake-controller
-
-      - name: Docker meta for Worker (to get consistent tag)
-        id: meta_worker
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/snake-worker
-
       - name: Set Image Names with Determined Tag
         run: |
-          REGISTRY="ghcr.io"
-          # Split owner and repo name from github.repository
-          OWNER=$(echo "${{ github.repository }}" | cut -d'/' -f1 | tr '[:upper:]' '[:lower:]')
-          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2 | tr '[:upper:]' '[:lower:]')
-          if [ -z "$OWNER" ] || [ -z "$REPO_NAME" ]; then
-            echo "Error: Could not parse owner or repo name from github.repository (${{ github.repository }})"
-            exit 1
-          fi
-          echo "OWNER=${OWNER}" >> "$GITHUB_ENV"
-          CONTROLLER_IMAGE_NAME="${OWNER}/snake-controller"
-          WORKER_IMAGE_NAME="${OWNER}/snake-worker"
           CONTROLLER_IMAGE_TAG="${{ steps.meta_controller.outputs.version }}"
           WORKER_IMAGE_TAG="${{ steps.meta_worker.outputs.version }}"
-
           echo "CONTROLLER_IMAGE=${REGISTRY}/${CONTROLLER_IMAGE_NAME}:${CONTROLLER_IMAGE_TAG}" >> "$GITHUB_ENV"
           echo "WORKER_IMAGE=${REGISTRY}/${WORKER_IMAGE_NAME}:${WORKER_IMAGE_TAG}" >> "$GITHUB_ENV"
 
@@ -245,11 +210,11 @@ jobs:
           echo "Worker Image Resolved: ${{ env.WORKER_IMAGE }}"
 
       - name: Create env file
-        working-directory: docker-compose-deploy-${{ matrix.type }}
+        working-directory: docker-compose-deploy
         run: cp sample.env .env
 
       - name: Set image tags in .env file
-        working-directory: docker-compose-deploy-${{ matrix.type }}
+        working-directory: docker-compose-deploy
         run: |
           # Use the environment variables containing the full image path with tag
           echo "CONTROLLER_IMAGE=${{ env.CONTROLLER_IMAGE }}" >> .env
@@ -258,7 +223,7 @@ jobs:
           cat .env
 
       - name: Start compose
-        working-directory: docker-compose-deploy-${{ matrix.type }}
+        working-directory: docker-compose-deploy
         run: |
           # Start services in background
           docker compose --file docker-compose.yml up --no-build --detach || true
