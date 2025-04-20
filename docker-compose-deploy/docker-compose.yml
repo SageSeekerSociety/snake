@@ -44,7 +44,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "curl -f http://localhost/api/cheese-auth/status && curl -f http://localhost/api/sandbox/status",
+          "curl -f http://localhost/api/cheese-auth/status && curl -f http://localhost/api/sandbox/actuator/health",
         ]
       start_period: 180s
       start_interval: 5s
