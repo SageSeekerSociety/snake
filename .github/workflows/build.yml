@@ -14,10 +14,6 @@ jobs:
   build-jar:
     runs-on: ubuntu-latest
 
-    strategy:
-      matrix:
-        project: ["backend-controller", "backend-worker"]
-
     steps:
       - uses: actions/checkout@v4
 
@@ -61,8 +57,7 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Build with Maven
-        working-directory: ${{ matrix.project }}
-        run: ./mvnw install
+        run: ./mvnw clean install
 
       - name: Check uncommitted changes to ensure format applied
         run: |
@@ -74,17 +69,33 @@ jobs:
             echo "No uncommitted changes."
           fi
 
-      - name: Upload jar
+      - name: Upload Controller jar
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.project }}-jar
-          path: ${{ matrix.project }}/target/*.jar
+          name: backend-controller-jar
+          path: backend-controller/target/snake.controller-*.jar
+          if-no-files-found: error
 
-      - name: Upload coverage report
+      - name: Upload Worker jar
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.project }}-coverage
-          path: ${{ matrix.project }}/target/site/jacoco
+          name: backend-worker-jar
+          path: backend-worker/target/snake.worker-*.jar
+          if-no-files-found: error
+
+      - name: Upload Controller coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-controller-coverage
+          path: backend-controller/target/site/jacoco
+          if-no-files-found: warn
+
+      - name: Upload Worker coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-worker-coverage
+          path: backend-worker/target/site/jacoco
+          if-no-files-found: warn
 
   build-docker:
     runs-on: ubuntu-latest
