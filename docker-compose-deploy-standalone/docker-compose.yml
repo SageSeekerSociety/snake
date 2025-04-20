@@ -53,7 +53,7 @@ services:
       retries: 3
 
   backend-worker:
-    image: ghcr.io/sageseekersociety/snake:${BACKEND_WORKER_TAG:-main}
+    image: ${WORKER_IMAGE:-ghcr.io/sageseekersociety/snake-worker:${BACKEND_WORKER_TAG:-main}}
     env_file: .env
     cgroup: host
     volumes:
@@ -83,10 +83,9 @@ services:
     privileged: true
 
   backend-controller:
-    image: ghcr.io/sageseekersociety/snake:${BACKEND_CONTROLLER_TAG:-main}
+    image: ${CONTROLLER_IMAGE:-ghcr.io/sageseekersociety/snake-controller:${BACKEND_CONTROLLER_TAG:-main}}
     env_file: .env
     environment:
-      - ROLE=controller
       - WORKER_URLS=http://backend-worker:8080
     depends_on:
       rabbitmq:
@@ -104,7 +103,7 @@ services:
       retries: 3
 
   cheese-auth:
-    image: ghcr.io/sageseekersociety/cheese-auth:${CHEESE_AUTH_TAG:-main}
+    image: ${CHEESE_AUTH_IMAGE:-ghcr.io/sageseekersociety/cheese-auth:${CHEESE_AUTH_TAG:-main}}
     env_file: .env
     volumes:
       - type: volume

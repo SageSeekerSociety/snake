@@ -53,11 +53,8 @@ services:
       retries: 3
 
   backend-controller:
-    image: ghcr.io/sageseekersociety/snake:${BACKEND_CONTROLLER_TAG:-main}
+    image: ${CONTROLLER_IMAGE:-ghcr.io/sageseekersociety/snake-controller:${BACKEND_CONTROLLER_TAG:-main}}
     env_file: .env
-    environment:
-      - ROLE=controller
-      - WORKER_URLS=http://backend-worker-1:8080,http://backend-worker-2:8080,http://backend-worker-3:8080
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -76,7 +73,7 @@ services:
       retries: 3
 
   backend-worker-1:
-    image: ghcr.io/sageseekersociety/snake:${BACKEND_WORKER_TAG:-main}
+    image: ${WORKER_IMAGE:-ghcr.io/sageseekersociety/snake-worker:${BACKEND_WORKER_TAG:-main}}
     env_file: .env
     cgroup: host
     depends_on:
@@ -96,8 +93,6 @@ services:
         source: backend_worker_cache_1
         target: /app/cache
       - ./application-worker.yml:/app/config/application.yml:ro
-    environment:
-      - ROLE=worker
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health"]
       start_period: 180s
@@ -108,7 +103,7 @@ services:
     privileged: true
 
   backend-worker-2:
-    image: ghcr.io/sageseekersociety/snake:${BACKEND_WORKER_TAG:-main}
+    image: ${WORKER_IMAGE:-ghcr.io/sageseekersociety/snake-worker:${BACKEND_WORKER_TAG:-main}}
     env_file: .env
     cgroup: host
     depends_on:
@@ -128,8 +123,6 @@ services:
         source: backend_worker_cache_2
         target: /app/cache
       - ./application-worker.yml:/app/config/application.yml:ro
-    environment:
-      - ROLE=worker
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health"]
       start_period: 180s
@@ -140,7 +133,7 @@ services:
     privileged: true
 
   backend-worker-3:
-    image: ghcr.io/sageseekersociety/snake:${BACKEND_WORKER_TAG:-main}
+    image: ${WORKER_IMAGE:-ghcr.io/sageseekersociety/snake-worker:${BACKEND_WORKER_TAG:-main}}
     env_file: .env
     cgroup: host
     depends_on:
@@ -172,7 +165,7 @@ services:
     privileged: true
 
   cheese-auth:
-    image: ghcr.io/sageseekersociety/cheese-auth:${CHEESE_AUTH_TAG:-main}
+    image: ${CHEESE_AUTH_IMAGE:-ghcr.io/sageseekersociety/cheese-auth:${CHEESE_AUTH_TAG:-main}}
     env_file: .env
     volumes:
       - type: volume
