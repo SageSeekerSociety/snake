@@ -71,6 +71,8 @@ services:
         condition: service_healthy
       cheese-auth-database:
         condition: service_healthy
+      backend-controller:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health"]
       start_period: 180s
@@ -92,8 +94,6 @@ services:
       minio:
         condition: service_healthy
       cheese-auth-database:
-        condition: service_healthy
-      backend-worker:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health"]

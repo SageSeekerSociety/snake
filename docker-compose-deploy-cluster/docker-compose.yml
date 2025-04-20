@@ -79,6 +79,15 @@ services:
     image: ghcr.io/sageseekersociety/snake:${BACKEND_WORKER_TAG:-main}
     env_file: .env
     cgroup: host
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      cheese-auth-database:
+        condition: service_healthy
+      backend-controller:
+        condition: service_healthy
     volumes:
       - type: volume
         source: backend_worker_data_1
@@ -102,6 +111,15 @@ services:
     image: ghcr.io/sageseekersociety/snake:${BACKEND_WORKER_TAG:-main}
     env_file: .env
     cgroup: host
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      cheese-auth-database:
+        condition: service_healthy
+      backend-controller:
+        condition: service_healthy
     volumes:
       - type: volume
         source: backend_worker_data_2
@@ -125,6 +143,15 @@ services:
     image: ghcr.io/sageseekersociety/snake:${BACKEND_WORKER_TAG:-main}
     env_file: .env
     cgroup: host
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      cheese-auth-database:
+        condition: service_healthy
+      backend-controller:
+        condition: service_healthy
     volumes:
       - type: volume
         source: backend_worker_data_3
