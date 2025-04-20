@@ -1,4 +1,34 @@
 services:
+  rabbitmq:
+    image: rabbitmq:4-management
+    hostname: rabbitmq
+    env_file: .env
+    ports:
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    hostname: minio
+    env_file: .env
+    ports:
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
   nginx:
     image: nginx:latest
     volumes:
@@ -11,7 +41,11 @@ services:
       cheese-auth:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost/api/cheese-auth/status && curl -f http://localhost/api/sandbox/status"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -f http://localhost/api/cheese-auth/status && curl -f http://localhost/api/sandbox/status",
+        ]
       start_period: 180s
       start_interval: 5s
       interval: 1m
@@ -21,18 +55,53 @@ services:
   backend-worker:
     image: ghcr.io/sageseekersociety/snake:${BACKEND_WORKER_TAG:-main}
     env_file: .env
+    cgroup: host
     volumes:
       - type: volume
         source: backend_worker_data
         target: /app/data
+      - type: volume
+        source: backend_worker_cache
+        target: /app/cache
+      - ./application-worker.yml:/app/config/application.yml:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      cheese-auth-database:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/status"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health"]
       start_period: 180s
       start_interval: 5s
       interval: 1m
       timeout: 10s
       retries: 3
     privileged: true
+
+  backend-controller:
+    image: ghcr.io/sageseekersociety/snake:${BACKEND_CONTROLLER_TAG:-main}
+    env_file: .env
+    environment:
+      - ROLE=controller
+      - WORKER_URLS=http://backend-worker:8080
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      cheese-auth-database:
+        condition: service_healthy
+      backend-worker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health"]
+      start_period: 180s
+      start_interval: 5s
+      interval: 1m
+      timeout: 10s
+      retries: 3
 
   cheese-auth:
     image: ghcr.io/sageseekersociety/cheese-auth:${CHEESE_AUTH_TAG:-main}
@@ -41,6 +110,7 @@ services:
       - type: volume
         source: cheese_auth_uploads
         target: /app/uploads
+      - ./plugins:/app/server/plugins
     depends_on:
       cheese-auth-database:
         condition: service_healthy
@@ -66,8 +136,11 @@ services:
       interval: 1m
       timeout: 10s
       retries: 3
-  
+
 volumes:
+  rabbitmq_data:
+  minio_data:
   backend_worker_data:
+  backend_worker_cache:
   cheese_auth_uploads:
   cheese_auth_db_pg:
