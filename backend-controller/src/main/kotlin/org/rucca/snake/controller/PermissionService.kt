@@ -82,7 +82,7 @@ class PermissionService(private val authorizationService: AuthorizationService) 
                     ),
                     Permission(
                         authorizedActions = listOf("query"),
-                        authorizedResource = AuthorizedResource(types = listOf("submitters")),
+                        authorizedResource = AuthorizedResource(types = listOf("player", "job")),
                     ),
                 ),
         )

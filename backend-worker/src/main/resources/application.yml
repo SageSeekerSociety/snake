@@ -1,0 +1,107 @@
+# Spring Boot 应用基本配置
+spring:
+  application:
+    name: snake.worker
+  # --- 数据库配置 ---
+  # 通常用于本地开发或测试环境，生产环境建议使用更安全的方式管理凭证
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:mydb}?currentSchema=${DB_SCHEMA:public}
+    username: ${DB_USERNAME:username}
+    password: ${DB_PASSWORD:mypassword}
+    driver-class-name: org.postgresql.Driver
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+  jpa:
+    show-sql: true # 开发时方便调试，生产环境通常关闭
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: validate # 生产环境推荐使用 validate 或 none，通过 Flyway/Liquibase 管理 Schema
+
+# 服务器配置
+server:
+  port: 8080
+
+# --- Actuator 配置 ---
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health # 只暴露 health 端点
+  endpoint:
+    health:
+      show-details: when_authorized # 或 always/never
+
+cheese-auth:
+  jwt-secret: test-secret
+  warn-audit-failure: true
+  auth-server-url: ${CHEESE_AUTH_SERVER_URL:http://localhost:8080}
+
+application:
+  compiler-path: /bin/clang++
+  compiler-parameter:
+    - -O2
+    - -std=c++17
+    - -Wall
+  data-directory: ./data # 用户数据和临时文件根目录
+  nsjail:
+    path: /usr/local/src/nsjail/nsjail
+    base-parameters:
+      - -M
+      - o
+      - -R
+      - /lib
+      - -R
+      - /lib64
+      - --disable_proc
+      - --rlimit_nproc
+      - "0"
+      - --rlimit_fsize
+      - "0"
+      - --user
+      - "99999"
+      - --group
+      - "99999"
+      - -v
+      - --use_cgroupv2
+      - --max_cpus
+      - "1"
+  cache: # 本地缓存配置
+    base-path: ./cache/programs
+    ttl-days: 7
+    cleanup-cron: "0 0 3 * * ?" # 每天午夜清理缓存
+  concurrency:
+    nsjail-permits: 8 # 同时运行的 nsjail 数量限制 (基于资源)
+    max-worker-jobs: 8 # 同时运行的 nsjail 数量限制 (基于资源)
+  polling: # 主动拉取配置
+    idle-delay-ms: 20 # 队列空闲时的轮询间隔
+    busy-delay-ms: 100 # Worker 忙时的轮询间隔 (等待更长时间)
+    receive-timeout-ms: 10 # 拉取时阻塞
+
+# --- AMQP (RabbitMQ) 配置 ---
+amqp:
+  queue:
+    compile: oj.compile.tasks # 编译任务队列名
+    execute: oj.execute.tasks # 执行任务队列名
+    # compile-dlq: oj.compile.tasks.dlq # (可选) 死信队列
+    # execute-dlq: oj.execute.tasks.dlq # (可选) 死信队列
+    # results: oj.results.notify        # (可选) 结果通知队列
+  exchange:
+    requests: oj.requests.exchange # 请求交换机
+    results: oj.results.exchange # (可选) 结果交换机
+    # requests-dlx: oj.requests.exchange.dlx # (可选) 死信交换机
+  routingkey:
+    compile: task.compile # 路由键
+    execute: task.execute # 路由键
+    result: result.notify # (可选) 结果路由键
+    # compile-dlq: task.compile.dlq # (可选) 死信路由键
+    # execute-dlq: task.execute.dlq # (可选) 死信路由键
+
+# --- MinIO 配置 ---
+minio:
+  endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+  accessKey: ${MINIO_ACCESS_KEY:minioadmin}
+  secretKey: ${MINIO_SECRET_KEY:minioadmin}
+  bucketName: ${MINIO_BUCKET_NAME:oj-programs}

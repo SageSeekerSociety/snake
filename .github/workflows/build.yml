@@ -14,10 +14,6 @@ jobs:
   build-jar:
     runs-on: ubuntu-latest
 
-    strategy:
-      matrix:
-        project: ["backend-controller", "backend-worker"]
-
     steps:
       - uses: actions/checkout@v4
 
@@ -61,8 +57,7 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Build with Maven
-        working-directory: ${{ matrix.project }}
-        run: ./mvnw install
+        run: ./mvnw clean install
 
       - name: Check uncommitted changes to ensure format applied
         run: |
@@ -74,17 +69,33 @@ jobs:
             echo "No uncommitted changes."
           fi
 
-      - name: Upload jar
+      - name: Upload Controller jar
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.project }}-jar
-          path: ${{ matrix.project }}/target/*.jar
+          name: backend-controller-jar
+          path: backend-controller/target/snake.controller-*.jar
+          if-no-files-found: error
 
-      - name: Upload coverage report
+      - name: Upload Worker jar
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.project }}-coverage
-          path: ${{ matrix.project }}/target/site/jacoco
+          name: backend-worker-jar
+          path: backend-worker/target/snake.worker-*.jar
+          if-no-files-found: error
+
+      - name: Upload Controller coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-controller-coverage
+          path: backend-controller/target/site/jacoco
+          if-no-files-found: warn
+
+      - name: Upload Worker coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-worker-coverage
+          path: backend-worker/target/site/jacoco
+          if-no-files-found: warn
 
   build-docker:
     runs-on: ubuntu-latest
@@ -100,7 +111,18 @@ jobs:
       - name: Set Environment Variables
         run: |
           echo "REGISTRY=ghcr.io" >> "$GITHUB_ENV"
-          echo "IMAGE_NAME=SageSeekerSociety/snake" >> "$GITHUB_ENV"
+          # Split owner and repo name from github.repository
+          OWNER=$(echo "${{ github.repository }}" | cut -d'/' -f1 | tr '[:upper:]' '[:lower:]')
+          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2 | tr '[:upper:]' '[:lower:]')
+          if [ -z "$OWNER" ] || [ -z "$REPO_NAME" ]; then
+            echo "Error: Could not parse owner or repo name from github.repository (${{ github.repository }})"
+            exit 1
+          fi
+          echo "OWNER=${OWNER}" >> "$GITHUB_ENV"
+          echo "CONTROLLER_IMAGE_NAME=${OWNER}/snake-controller" >> "$GITHUB_ENV"
+          echo "WORKER_IMAGE_NAME=${OWNER}/snake-worker" >> "$GITHUB_ENV"
+          echo "NSJAIL_REPO=https://github.com/SageSeekerSociety/nsjail.git" >> "$GITHUB_ENV"
+          echo "NSJAIL_REF=master" >> "$GITHUB_ENV"
 
       - name: Login to docker registry
         uses: docker/login-action@v3
@@ -109,11 +131,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker meta
-        id: meta
+      - name: Docker meta for Controller
+        id: meta_controller
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.CONTROLLER_IMAGE_NAME }}
+
+      - name: Docker meta for Worker
+        id: meta_worker
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.WORKER_IMAGE_NAME }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -125,8 +153,8 @@ jobs:
 
       - name: Move Worker's Jar
         run: |
-          mkdir backend-worker/target || true
-          mv *.jar backend-worker/target/
+          mkdir -p backend-worker/target
+          mv *.jar backend-worker/target/snake-worker.jar || echo "Worker JAR move failed/skipped"
 
       - name: Download Controller's Jar
         uses: actions/download-artifact@v4
@@ -135,53 +163,67 @@ jobs:
 
       - name: Move Controller's Jar
         run: |
-          mkdir backend-controller/target || true
-          mv *.jar backend-controller/target/
+          mkdir -p backend-controller/target
+          mv *.jar backend-controller/target/snake-controller.jar || echo "Controller JAR move failed/skipped"
 
-      - name: Build
+      # --- Build Controller Image ---
+      - name: Build and push Controller image
+        id: build_controller
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          file: ./Dockerfile.controller
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta_controller.outputs.tags }}
+          labels: ${{ steps.meta_controller.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           load: true
 
-  run-compose:
-    runs-on: ubuntu-latest
-    needs: build-docker
-
-    strategy:
-      matrix:
-        type: ["standalone", "cluster"]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set Environment Variables
-        run: |
-          echo "REGISTRY=ghcr.io" >> "$GITHUB_ENV"
-          echo "IMAGE_NAME=SageSeekerSociety/snake" >> "$GITHUB_ENV"
-
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
+      # --- Build Worker Image ---
+      - name: Build and push Worker image
+        id: build_worker
+        uses: docker/build-push-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          context: ${{ github.workspace }}
+          file: ./Dockerfile.worker
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta_worker.outputs.tags }}
+          labels: ${{ steps.meta_worker.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          load: true
+          build-args: |
+            NSJAIL_REPO=${{ env.NSJAIL_REPO }}
+            NSJAIL_BRANCH=${{ env.NSJAIL_REF }}
+
+      - name: Set Image Names with Determined Tag
+        run: |
+          CONTROLLER_IMAGE_TAG="${{ steps.meta_controller.outputs.version }}"
+          WORKER_IMAGE_TAG="${{ steps.meta_worker.outputs.version }}"
+          echo "CONTROLLER_IMAGE=${REGISTRY}/${CONTROLLER_IMAGE_NAME}:${CONTROLLER_IMAGE_TAG}" >> "$GITHUB_ENV"
+          echo "WORKER_IMAGE=${REGISTRY}/${WORKER_IMAGE_NAME}:${WORKER_IMAGE_TAG}" >> "$GITHUB_ENV"
+
+      - name: Debug Image Variables
+        run: |
+          echo "Controller Image Resolved: ${{ env.CONTROLLER_IMAGE }}"
+          echo "Worker Image Resolved: ${{ env.WORKER_IMAGE }}"
 
       - name: Create env file
-        working-directory: docker-compose-deploy-${{ matrix.type }}
+        working-directory: docker-compose-deploy
         run: cp sample.env .env
 
-      - name: set cheese-auth image tag
+      - name: Set image tags in .env file
+        working-directory: docker-compose-deploy
         run: |
-          echo "BACKEND_WORKER_TAG=${{ steps.meta.outputs.version }}" >> "$GITHUB_ENV"
-          echo "BACKEND_CONTROLLER_TAG=${{ steps.meta.outputs.version }}" >> "$GITHUB_ENV"
+          # Use the environment variables containing the full image path with tag
+          echo "CONTROLLER_IMAGE=${{ env.CONTROLLER_IMAGE }}" >> .env
+          echo "WORKER_IMAGE=${{ env.WORKER_IMAGE }}" >> .env
+          echo ".env file content for compose:"
+          cat .env
 
       - name: Start compose
-        working-directory: docker-compose-deploy-${{ matrix.type }}
+        working-directory: docker-compose-deploy
         run: |
           # Start services in background
           docker compose --file docker-compose.yml up --no-build --detach || true

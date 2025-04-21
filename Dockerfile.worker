@@ -1,0 +1,85 @@
+# Dockerfile.worker - For the snake-worker service
+# Builds nsjail in a builder stage based on the same final image base
+
+# --- Stage 1: Build Nsjail ---
+FROM openjdk:25-jdk-slim as nsjail_builder
+
+ARG NSJAIL_REPO=https://github.com/SageSeekerSociety/nsjail.git
+ARG NSJAIL_BRANCH=master
+
+USER root
+
+# Install build dependencies + git
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    build-essential git pkg-config protobuf-compiler libprotobuf-dev \
+    libnl-route-3-dev bison flex libtool autoconf ca-certificates \
+    libc6 libstdc++6 libprotobuf32 libnl-route-3-200 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/local/src
+
+# Clone or update nsjail source, echo CACHE_BUSTER to help invalidate layer
+RUN echo "Preparing nsjail source from ${NSJAIL_REPO} branch ${NSJAIL_BRANCH}..." && \
+    NSJAIL_SRC_DIR="nsjail" && \
+    if [ -d "$NSJAIL_SRC_DIR/.git" ]; then \
+    echo "Nsjail directory exists. Fetching and resetting to origin/${NSJAIL_BRANCH}..."; \
+    cd $NSJAIL_SRC_DIR && \
+    git fetch origin && \
+    git reset --hard origin/${NSJAIL_BRANCH} && \
+    git clean -fdx; \
+    else \
+    echo "Cloning nsjail repository (branch: ${NSJAIL_BRANCH})..."; \
+    git clone --depth 1 --branch ${NSJAIL_BRANCH} ${NSJAIL_REPO} $NSJAIL_SRC_DIR; \
+    cd $NSJAIL_SRC_DIR; \
+    fi
+
+# Build nsjail (always clean first)
+WORKDIR /usr/local/src/nsjail
+RUN echo "Building nsjail (forcing clean)..." && \
+    make clean && \
+    make -j$(nproc) && \
+    strip nsjail || echo "Strip failed, continuing..."
+
+# --- Stage 2: Final Worker Image ---
+FROM openjdk:25-jdk-slim
+
+# Install runtime dependencies for Java App, Nsjail, AND Compiler
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libc6 libstdc++6 libprotobuf32 libnl-route-3-200 \
+    curl ca-certificates \
+    g++ \
+    tini \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the compiled nsjail binary from the builder stage
+COPY --from=nsjail_builder /usr/local/src/nsjail/nsjail /usr/local/bin/nsjail
+RUN chmod +x /usr/local/bin/nsjail
+
+WORKDIR /app
+
+# Copy ONLY the Worker's JAR file
+COPY backend-worker/target/snake-worker.jar worker.jar
+
+# Environment Variables
+ENV NSJAIL_PATH=/usr/local/bin/nsjail
+ENV COMPILER_PATH=/usr/bin/g++
+ENV COMPILER_PARAMETER="-std=c++17,-Wall,-Wextra,-Wshadow,-O2"
+ENV NSJAIL_PARAMETER="-M,o,-R,/lib,-R,/lib64,--disable_proc,--rlimit_nproc,0,--rlimit_fsize,0,--user,99999,--group,99999,-v,--use_cgroupv2,--max_cpus,1"
+
+# Volumes
+VOLUME /app/config
+VOLUME /app/data
+VOLUME /app/cache
+
+# Entrypoint
+ENTRYPOINT ["/usr/bin/tini", "--", "sh", "-c", "echo \"Starting worker...\" && \
+    java -jar worker.jar \
+    --spring.config.additional-location=file:/app/config/application.yml \
+    --application.compiler-path=${COMPILER_PATH} \
+    --application.compiler-parameter=\"${COMPILER_PARAMETER}\" \
+    --application.data-directory=/app/data \
+    --application.nsjail.path=${NSJAIL_PATH} \
+    --application.nsjail.base-parameters=\"${NSJAIL_PARAMETER}\" \
+    --cache.base-path=/app/cache \
+    "]
