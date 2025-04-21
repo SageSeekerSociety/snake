@@ -173,7 +173,7 @@ jobs:
         with:
           context: ${{ github.workspace }}
           file: ./Dockerfile.controller
-          push: ${{ github.event_name == 'push' }}
+          push: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
           tags: ${{ steps.meta_controller.outputs.tags }}
           labels: ${{ steps.meta_controller.outputs.labels }}
           cache-from: type=gha
@@ -187,7 +187,7 @@ jobs:
         with:
           context: ${{ github.workspace }}
           file: ./Dockerfile.worker
-          push: ${{ github.event_name == 'push' }}
+          push: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
           tags: ${{ steps.meta_worker.outputs.tags }}
           labels: ${{ steps.meta_worker.outputs.labels }}
           cache-from: type=gha
