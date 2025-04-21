@@ -35,7 +35,7 @@
         <jacoco.version>0.8.12</jacoco.version>
         <maven-surefire.version>3.5.2</maven-surefire.version>
         <maven-antrun.version>3.1.0</maven-antrun.version>
-        <flyway.version>10.0.0</flyway.version> <!-- 统一 Flyway 版本 -->
+        <flyway.version>11.7.2</flyway.version> <!-- 统一 Flyway 版本 -->
         <jakarta-annotation-api.version>3.0.0</jakarta-annotation-api.version>
         <jakarta-validation-api.version>3.1.1</jakarta-validation-api.version>
         <jakarta-servlet-api.version>6.1.0</jakarta-servlet-api.version>
