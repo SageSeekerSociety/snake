@@ -15,7 +15,6 @@ WORKDIR /app
 COPY backend-controller/target/snake-controller.jar controller.jar
 
 # Environment Variables specific or defaulted for Controller
-ENV JWT_SECRET=test-secret
 ENV WARN_AUDIT_FAILURE=true
 
 # Volume for external configuration
@@ -29,6 +28,5 @@ ENTRYPOINT ["/usr/bin/tini", "--", "sh", "-c", "echo \"Starting controller...\" 
     java -jar controller.jar \
     --server.port=8080 \
     --spring.config.additional-location=file:/app/config/application.yml \
-    --cheese-auth.jwt-secret=${JWT_SECRET} \
     --cheese-auth.warn-audit-failure=${WARN_AUDIT_FAILURE} \
     "]

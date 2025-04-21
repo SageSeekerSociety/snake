@@ -196,6 +196,7 @@ jobs:
           build-args: |
             NSJAIL_REPO=${{ env.NSJAIL_REPO }}
             NSJAIL_BRANCH=${{ env.NSJAIL_REF }}
+            CACHE_BUSTER=${{ github.sha }}
 
       - name: Set Image Names with Determined Tag
         run: |
