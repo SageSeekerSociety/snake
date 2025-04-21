@@ -6,6 +6,7 @@ FROM openjdk:25-jdk-slim AS nsjail_builder
 
 ARG NSJAIL_REPO=https://github.com/SageSeekerSociety/nsjail.git
 ARG NSJAIL_BRANCH=master
+ARG CACHE_BUSTER=build
 
 USER root
 
@@ -20,7 +21,8 @@ RUN apt-get update && \
 WORKDIR /usr/local/src
 
 # Clone or update nsjail source, echo CACHE_BUSTER to help invalidate layer
-RUN echo "Preparing nsjail source from ${NSJAIL_REPO} branch ${NSJAIL_BRANCH}..." && \
+RUN echo "Cache Buster: ${CACHE_BUSTER}" && \
+    echo "Preparing nsjail source from ${NSJAIL_REPO} branch ${NSJAIL_BRANCH}..." && \
     NSJAIL_SRC_DIR="nsjail" && \
     if [ -d "$NSJAIL_SRC_DIR/.git" ]; then \
     echo "Nsjail directory exists. Fetching and resetting to origin/${NSJAIL_BRANCH}..."; \
