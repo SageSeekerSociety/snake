@@ -27,7 +27,7 @@ server:
   port: 8080
 
 cheese-auth:
-  jwt-secret: test-secret
+  jwt-secret: ${JWT_SECRET:test-secret}
   warn-audit-failure: true
   auth-server-url: ${CHEESE_AUTH_SERVER_URL:http://localhost:8080}
 

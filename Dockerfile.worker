@@ -2,7 +2,7 @@
 # Builds nsjail in a builder stage based on the same final image base
 
 # --- Stage 1: Build Nsjail ---
-FROM openjdk:25-jdk-slim as nsjail_builder
+FROM openjdk:25-jdk-slim AS nsjail_builder
 
 ARG NSJAIL_REPO=https://github.com/SageSeekerSociety/nsjail.git
 ARG NSJAIL_BRANCH=master

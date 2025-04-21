@@ -34,11 +34,6 @@ management:
     health:
       show-details: when_authorized # 或 always/never
 
-cheese-auth:
-  jwt-secret: test-secret
-  warn-audit-failure: true
-  auth-server-url: ${CHEESE_AUTH_SERVER_URL:http://localhost:8080}
-
 application:
   compiler-path: /bin/clang++
   compiler-parameter:
