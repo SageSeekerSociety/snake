@@ -477,6 +477,22 @@ class ExecuteService(
         }
     }
 
+    /** Checks if the log contains evidence of a Wall Clock timeout. */
+    private fun isWallClockTimeout(logContent: String?): Boolean {
+        if (logContent == null) return false
+        // Look for the characteristic log message indicating wall clock timeout
+        // The pattern is: "pid=XXX run time >= time limit (XXX >= XXX) (XXX). Killing it"
+        val wallClockTimeoutRegex = Regex("pid=\\d+ run time >= time limit \\(\\d+ >= \\d+\\).*?Killing it")
+        return wallClockTimeoutRegex.find(logContent) != null
+    }
+
+    /** Checks if the memory usage indicates a Memory Limit Exceeded condition. */
+    private fun isMemoryLimitExceeded(stats: CgroupStats?, request: ExecutionRequest): Boolean {
+        if (stats?.memoryPeakKb == null) return false
+        // Check if memory usage was close to or at the limit (95% threshold)
+        return stats.memoryPeakKb >= request.memoryLimitKb * 0.95
+    }
+
     /** Determines the final JobStatus based on nsjail result and request limits. */
     private fun determineFinalStatus(
         result: NsjailResult,
@@ -501,15 +517,21 @@ class ExecuteService(
             152, (128 + SIGXCPU) -> JobStatus.TLE
             // SIGKILL (Often sent for OOM by cgroup or external killer) - exit code 137 (128 + 9)
             137, (128 + SIGKILL) -> {
-                // If killed, check if memory usage was close to limit
-                if (
-                    stats?.memoryPeakKb != null &&
-                    stats.memoryPeakKb >= request.memoryLimitKb * 0.95
-                ) { // 95% threshold
-                    JobStatus.MLE
-                } else {
-                    JobStatus.RE // Killed for other reasons? Or maybe still TLE/MLE
+                // Step 1: Check for Wall Clock timeout in logs
+                if (isWallClockTimeout(result.logContent)) {
+                    logger.info("Detected Wall Clock TLE from log content for exit code 137")
+                    return JobStatus.TLE
                 }
+
+                // Step 2: Check for Memory Limit Exceeded
+                if (isMemoryLimitExceeded(stats, request)) {
+                    logger.info("Detected MLE from memory stats for exit code 137")
+                    return JobStatus.MLE
+                }
+
+                // Step 3: Default to TLE if neither of the above conditions are met
+                logger.info("Defaulting to CPU TLE for exit code 137")
+                return JobStatus.TLE
             }
             // SIGSEGV (Segmentation fault) - exit code 139 (128 + 11)
             139, (128 + SIGSEGV) -> JobStatus.RE
@@ -537,7 +559,22 @@ class ExecuteService(
         val memInfo = "Mem: ${stats?.memoryPeakKb?.let { "${it}KB" } ?: "N/A"}"
 
         return when (status) {
-            JobStatus.TLE -> "Time Limit Exceeded. $exitInfo, $timeInfo, $memInfo"
+            JobStatus.TLE -> {
+                // Provide more specific TLE information based on the exit code and log content
+                val tleType = when {
+                    result.timedOut -> "Wall Clock Time Limit Exceeded (Process Timeout)"
+                    result.exitCode == 152 || result.exitCode == (128 + SIGXCPU) -> "CPU Time Limit Exceeded (SIGXCPU)"
+                    result.exitCode == 137 || result.exitCode == (128 + SIGKILL) -> {
+                        if (isWallClockTimeout(result.logContent)) {
+                            "Wall Clock Time Limit Exceeded"
+                        } else {
+                            "CPU Time Limit Exceeded"
+                        }
+                    }
+                    else -> "Time Limit Exceeded"
+                }
+                "$tleType. $exitInfo, $timeInfo, $memInfo"
+            }
             JobStatus.MLE -> "Memory Limit Exceeded. $exitInfo, $timeInfo, $memInfo"
             JobStatus.RE -> "Runtime Error. $exitInfo, $timeInfo, $memInfo"
             JobStatus.OLE ->
