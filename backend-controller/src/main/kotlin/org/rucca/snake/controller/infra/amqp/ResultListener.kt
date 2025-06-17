@@ -3,6 +3,7 @@ package org.rucca.snake.controller.infra.amqp
 import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
+import com.rabbitmq.client.Channel
 import java.util.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,6 +20,8 @@ import org.rucca.snake.controller.domain.service.PlayerUpdateService
 import org.slf4j.LoggerFactory
 import org.springframework.amqp.core.Message
 import org.springframework.amqp.rabbit.annotation.RabbitListener
+import org.springframework.amqp.support.AmqpHeaders
+import org.springframework.messaging.handler.annotation.Header
 import org.springframework.stereotype.Component
 
 @Component
@@ -35,7 +38,11 @@ class ResultListener(
 
     // Listen to the results queue defined in configuration
     @RabbitListener(queues = ["\${amqp.queue.results:oj.results.notify}"])
-    fun handleResultMessage(message: Message) {
+    fun handleResultMessage(
+        message: Message,
+        channel: Channel,
+        @Header(AmqpHeaders.DELIVERY_TAG) deliveryTag: Long,
+    ) {
         val messageProperties = message.messageProperties
         val messageBody = String(message.body, Charsets.UTF_8)
         val correlationId = messageProperties.correlationId // Original JobId
@@ -137,10 +144,9 @@ class ResultListener(
                         data = baseEventData,
                     ),
                 )
-                logger.info(
-                    "Published a single, enriched final result event for job {}",
-                    correlationId,
-                )
+
+                channel.basicAck(deliveryTag, false)
+                logger.info("Successfully processed and ACKed message for job {}", correlationId)
             } catch (e: Exception) {
                 logger.error(
                     "Failed to process result notification for JobId {}: {}",
@@ -148,6 +154,7 @@ class ResultListener(
                     e.message,
                     e,
                 )
+                channel.basicNack(deliveryTag, false, false)
                 jobFlowService.publishError(
                     jobUUID,
                     "Internal error processing result notification.",

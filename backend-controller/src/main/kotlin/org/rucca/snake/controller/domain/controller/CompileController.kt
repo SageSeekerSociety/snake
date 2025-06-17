@@ -116,6 +116,11 @@ class CompileController(
 
         controllerScope.launch {
             var collectingJob: Job? = null
+
+            emitter.onCompletion { collectingJob?.cancel("Emitter completed") }
+            emitter.onTimeout { collectingJob?.cancel("Emitter timed out") }
+            emitter.onError { err -> collectingJob?.cancel("Emitter error: ${err?.message}") }
+
             try {
                 val jobFlow = jobFlowService.getJobFlow(jobUUID)
 
@@ -155,11 +160,8 @@ class CompileController(
                 try {
                     emitter.completeWithError(e)
                 } catch (_: Exception) {}
-            } finally {
-                emitter.onCompletion { collectingJob?.cancel("Emitter completed") }
-                emitter.onTimeout { collectingJob?.cancel("Emitter timed out") }
-                emitter.onError { err -> collectingJob?.cancel("Emitter error: ${err?.message}") }
             }
+            // finally 块已不再需要 emitter 回调注册
         }
         return emitter
     }

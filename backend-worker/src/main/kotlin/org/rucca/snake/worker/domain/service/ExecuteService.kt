@@ -331,7 +331,9 @@ $previousMemoryData"""
             memoryKb = stats?.memoryPeakKb
 
             // Determine final status based on exit code, limits, and potentially signals
-            currentStatus = determineFinalStatus(nsjailResult, request, stats)
+            if (currentStatus != JobStatus.ERROR) {
+                currentStatus = determineFinalStatus(nsjailResult, request, stats)
+            }
 
             if (currentStatus != JobStatus.SUCCESS) {
                 errorDetails = buildErrorDetails(currentStatus, nsjailResult, stats)
@@ -500,8 +502,7 @@ $previousMemoryData"""
                 // Don't merge stderr to stdout, nsjail logs errors to stderr or log file
                 // processBuilder.redirectErrorStream(true)
 
-                val process = processBuilder
-                    .start()
+                val process = processBuilder.start()
 
                 // Asynchronously capture stdout
                 val outputGobbler =
