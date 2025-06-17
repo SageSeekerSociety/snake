@@ -318,8 +318,10 @@ class CompileService(
         if (Files.exists(dir)) {
             // The blocking logic is now contained in a standard function.
             Files.walk(dir)
-                .sorted(Comparator.reverseOrder())
-                .forEach { Files.deleteIfExists(it) }
+                .use { stream ->
+                    stream.sorted(Comparator.reverseOrder())
+                        .forEach { Files.deleteIfExists(it) }
+                }
         }
     }
 
