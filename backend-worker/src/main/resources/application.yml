@@ -93,6 +93,15 @@ amqp:
     result: result.notify # (可选) 结果路由键
     # compile-dlq: task.compile.dlq # (可选) 死信路由键
     # execute-dlq: task.execute.dlq # (可选) 死信路由键
+  # RabbitMQ Listener Configuration
+  listener:
+    # This value should ideally be aligned with applicationConfig.concurrency.maxWorkerJobs
+    prefetch: 10
+    retry:
+      initial-interval: 1000
+      max-interval: 10000
+      multiplier: 2.0
+      max-attempts: 3
 
 # --- MinIO 配置 ---
 minio:
