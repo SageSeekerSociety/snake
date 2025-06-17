@@ -1,5 +1,6 @@
 package org.rucca.snake.controller.infra.amqp
 
+import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import java.util.*
@@ -33,9 +34,7 @@ class ResultListener(
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     // Listen to the results queue defined in configuration
-    @RabbitListener(
-        queues = ["\${amqp.queue.results:oj.results.notify}"]
-    ) // Use configured queue name
+    @RabbitListener(queues = ["\${amqp.queue.results:oj.results.notify}"])
     fun handleResultMessage(message: Message) {
         val messageProperties = message.messageProperties
         val messageBody = String(message.body, Charsets.UTF_8)
@@ -65,131 +64,83 @@ class ResultListener(
             messageType,
         )
 
-        // Launch processing in a coroutine to avoid blocking listener thread
         scope.launch {
             try {
-                var finalStatus: JobStatus? = null
-                var errorMessage: String? = null
+                val finalResultDto = jobQueryService.getJobStatusAndResult(jobUUID)
+
+                if (finalResultDto == null) {
+                    logger.error(
+                        "CRITICAL: Job {} processing complete, but couldn't find record in DB.",
+                        correlationId,
+                    )
+                    jobFlowService.publishError(
+                        jobUUID,
+                        "Failed to find job record after completion.",
+                    )
+                    return@launch
+                }
+
+                val baseEventData: MutableMap<String, Any?> =
+                    objectMapper.convertValue(
+                        finalResultDto,
+                        object : TypeReference<MutableMap<String, Any?>>() {},
+                    )
 
                 when (messageType) {
                     AmqpConstants.MESSAGE_TYPE_COMPILE_RESULT -> {
                         val notification: CompilationResultNotification =
                             objectMapper.readValue(messageBody)
-                        finalStatus = notification.status
-                        // Publish intermediate status update
-                        jobFlowService.publishEvent(
-                            jobUUID,
-                            JobSseEvent(
-                                jobId = correlationId,
-                                eventType = "STATUS_UPDATE",
-                                status = finalStatus,
-                                message =
-                                    if (finalStatus == JobStatus.FAILED) "Compilation failed"
-                                    else "Compilation finished",
-                            ),
-                        )
 
                         if (
                             notification.status == JobStatus.SUCCESS &&
                                 notification.compiledProgramRef != null
                         ) {
-                            logger.info(
-                                "Processing successful compilation result for job {}, user {}",
-                                notification.jobId,
-                                notification.userId,
-                            )
-                            // Update Player record
                             playerUpdateService.updatePlayerOnCompileSuccess(
                                 userId = notification.userId.toInt(),
                                 jobId = jobUUID,
                                 compiledProgramRef = notification.compiledProgramRef!!,
                                 compileTime = notification.timestamp,
                             )
-                        } else {
-                            logger.info(
-                                "Ignoring non-successful compilation result for job {}",
-                                notification.jobId,
-                            )
-                            errorMessage =
-                                "Compilation failed." // Set error message for final event
                         }
                     }
 
                     AmqpConstants.MESSAGE_TYPE_EXECUTE_RESULT -> {
                         val notification: ExecutionResultNotification =
                             objectMapper.readValue(messageBody)
-                        finalStatus = notification.status
-                        logger.info(
-                            "Processing execution result for job {}, user {}: {}",
-                            notification.jobId,
-                            notification.userId,
-                            notification.status,
-                        )
-                        // Publish intermediate status update
-                        // Construct detailed event data
-                        val eventData = mapOf(
-                            "action" to notification.action,
-                            "sessionId" to notification.sessionId,
-                            "tickNumber" to notification.tickNumber,
-                            "aiUserId" to notification.userId,
-                            "newMemoryData" to notification.newMemoryData,
-                            // "errorDetails" to notification.errorDetails, // If errorDetails were added to notification DTO
-                        )
 
-                        jobFlowService.publishEvent(
-                            jobUUID,
-                            JobSseEvent(
-                                jobId = correlationId,
-                                eventType = if (finalStatus == JobStatus.SUCCESS) "EXECUTION_SUCCESS" else "EXECUTION_FAILURE",
-                                status = finalStatus,
-                                message = "Execution finished with status: $finalStatus. Action: ${notification.action}",
-                                data = eventData,
-                            ),
-                        )
-                        // Optional: Handle execution results (e.g., disable player)
                         playerUpdateService.handleExecutionResult(
                             notification.userId.toInt(),
                             notification.status,
                         )
-                        if (finalStatus != JobStatus.SUCCESS) {
-                            errorMessage = "Execution finished with status: $finalStatus"
-                        }
+
+                        baseEventData["action"] = notification.action
+                        baseEventData["tickNumber"] = notification.tickNumber
+                        baseEventData["newMemoryData"] = notification.newMemoryData
                     }
 
                     else -> {
                         logger.warn(
-                            "Received result notification with unknown type '{}' for JobId: {}",
+                            "Unknown message type '{}' for JobId: {}",
                             messageType,
                             correlationId,
                         )
-                        errorMessage = "Received unknown result type."
                     }
                 }
 
-                // After processing, fetch the full final result from DB and publish it
-                if (finalStatus != null) {
-                    val finalResultDto = jobQueryService.getJobStatusAndResult(jobUUID)
-                    if (finalResultDto != null) {
-                        jobFlowService.publishFinalResult(jobUUID, finalResultDto)
-                        logger.info("Published final result event for job {}", correlationId)
-                    } else {
-                        // If final result not found in DB (shouldn't happen often), publish an
-                        // error
-                        jobFlowService.publishError(
-                            jobUUID,
-                            errorMessage
-                                ?: "Job completed, but failed to fetch final result details.",
-                        )
-                        logger.error(
-                            "Job {} finished with status {}, but couldn't fetch details from DB.",
-                            correlationId,
-                            finalStatus,
-                        )
-                    }
-                } else if (errorMessage != null) {
-                    // Handle cases where status wasn't determined but there was an error
-                    jobFlowService.publishError(jobUUID, errorMessage)
-                }
+                jobFlowService.publishEvent(
+                    jobUUID,
+                    JobSseEvent(
+                        jobId = correlationId,
+                        eventType = "FINAL_RESULT",
+                        status = finalResultDto.status,
+                        message = "Job finished with status: ${finalResultDto.status}",
+                        data = baseEventData,
+                    ),
+                )
+                logger.info(
+                    "Published a single, enriched final result event for job {}",
+                    correlationId,
+                )
             } catch (e: Exception) {
                 logger.error(
                     "Failed to process result notification for JobId {}: {}",
@@ -197,7 +148,6 @@ class ResultListener(
                     e.message,
                     e,
                 )
-                // Publish an error event to the SSE stream if possible
                 jobFlowService.publishError(
                     jobUUID,
                     "Internal error processing result notification.",

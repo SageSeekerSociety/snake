@@ -312,8 +312,7 @@ class JobSubmitService(
                 status = JobStatus.PENDING,
                 submitTime = submitTime,
                 clientRequestId = item.clientRequestId,
-                // gameTurnId = item.gameTurnId, // If needed
-                // other fields updated by worker
+                sessionId = UUID.fromString(finalSessionId),
             )
 
         // 2. Save to Database

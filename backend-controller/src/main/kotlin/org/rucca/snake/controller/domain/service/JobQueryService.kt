@@ -19,6 +19,14 @@ class JobQueryService(
 ) {
     private val logger = LoggerFactory.getLogger(JobQueryService::class.java)
 
+    fun getJobIdsBySessionId(sessionId: String, userId: Long): List<UUID> {
+        val jobIds = executionJobRepository.findJobIdsBySessionIdAndUserId(sessionId, userId)
+        if (jobIds.isEmpty()) {
+            return emptyList()
+        }
+        return jobIds
+    }
+
     /**
      * Finds a job (either compilation or execution) by its UUID and returns its result DTO.
      * Searches Execution jobs first, then Compilation jobs.

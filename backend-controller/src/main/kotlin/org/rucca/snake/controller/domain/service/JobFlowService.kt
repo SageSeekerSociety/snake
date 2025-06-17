@@ -4,6 +4,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.minutes
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.*
 import org.rucca.snake.controller.domain.model.JobResultDto
 import org.rucca.snake.controller.domain.model.JobSseEvent
@@ -37,19 +38,22 @@ class JobFlowService(
         // Compute if absent to ensure only one flow per jobId
         return jobFlows.computeIfAbsent(jobId) { newJobId ->
             logger.info("Creating new SharedFlow for jobId: {}", newJobId)
-            // replay=10: Keep the last 10 events for late subscribers
-            // extraBufferCapacity=64: Allow some buffer for bursts
-            // onBufferOverflow=BufferOverflow.DROP_OLDEST: Drop oldest if buffer is full
             val newFlow =
                 MutableSharedFlow<JobSseEvent>(
-                    replay = 10,
-                    extraBufferCapacity = 64,
-                    onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+                    replay = Int.MAX_VALUE,
+                    extraBufferCapacity = 16,
+                    onBufferOverflow = BufferOverflow.DROP_OLDEST,
                 )
 
             // Launch a cleanup task for this specific flow when it's created
             launchFlowCleanup(newJobId, newFlow)
             newFlow
+        }
+    }
+
+    fun getJobFlowsBySessionId(sessionId: String, userId: Long): List<SharedFlow<JobSseEvent>> {
+        return jobQueryService.getJobIdsBySessionId(sessionId, userId).map { jobId ->
+            getJobFlow(jobId)
         }
     }
 
@@ -62,6 +66,16 @@ class JobFlowService(
         if (flow != null) {
             logger.debug("Publishing event for jobId {}: {}", jobId, event.eventType)
             flow.emit(event)
+
+            if (event.eventType == "FINAL_RESULT" || event.eventType == "ERROR") {
+                logger.info(
+                    "Terminal event '{}' received for job {}. Scheduling flow for cleanup.",
+                    event.eventType,
+                    jobId,
+                )
+                // Delay removal to allow subscribers to receive the final event
+                removeFlow(jobId, delayMillis = 1.minutes.inWholeMilliseconds)
+            }
         } else {
             // This might happen if the result comes after the flow has timed out/been removed
             logger.warn("Attempted to publish event for non-existent or timed-out flow: {}", jobId)
@@ -103,6 +117,7 @@ class JobFlowService(
     }
 
     /** Launches a coroutine that monitors a flow for inactivity and removes it. */
+    @OptIn(FlowPreview::class)
     private fun launchFlowCleanup(jobId: UUID, flow: MutableSharedFlow<JobSseEvent>) {
         scope.launch {
             try {

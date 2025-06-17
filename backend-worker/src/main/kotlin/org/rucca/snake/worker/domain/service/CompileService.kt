@@ -8,6 +8,7 @@ import org.rucca.snake.common.infra.persistence.repository.CompilationJobReposit
 import org.rucca.snake.worker.config.ApplicationConfig
 import org.rucca.snake.worker.infra.amqp.ResultNotifier
 import org.rucca.snake.worker.infra.storage.MinioService
+import org.rucca.snake.worker.utils.deleteDirectoryRecursively
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import java.io.IOException
@@ -307,21 +308,6 @@ class CompileService(
                 // This is problematic. If DB update fails, the job state might be inconsistent.
                 // Consider retry logic or marking the job as potentially inconsistent.
             }
-        }
-    }
-
-    /**
-     * A regular (non-suspend) function to encapsulate the blocking file IO.
-     * This helps in silencing linter warnings about blocking calls in coroutines.
-     */
-    private fun deleteDirectoryRecursively(dir: Path) {
-        if (Files.exists(dir)) {
-            // The blocking logic is now contained in a standard function.
-            Files.walk(dir)
-                .use { stream ->
-                    stream.sorted(Comparator.reverseOrder())
-                        .forEach { Files.deleteIfExists(it) }
-                }
         }
     }
 

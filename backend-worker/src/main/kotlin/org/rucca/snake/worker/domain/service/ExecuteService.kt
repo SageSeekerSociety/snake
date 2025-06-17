@@ -9,15 +9,16 @@ import org.rucca.snake.common.infra.persistence.repository.ExecutionJobRepositor
 import org.rucca.snake.worker.config.ApplicationConfig
 import org.rucca.snake.worker.infra.amqp.ResultNotifier
 import org.rucca.snake.worker.infra.storage.MinioService
+import org.rucca.snake.worker.utils.deleteDirectoryRecursively
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.stereotype.Service
 import java.io.IOException
-import java.time.Duration
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.time.Duration
 import java.time.Instant
 import java.util.*
 import java.util.concurrent.TimeUnit
@@ -35,10 +36,6 @@ class ExecuteService(
     @Value("\${memory.max.size.kb}") private val memoryMaxSizeKb: Int, // Added memory max size
 ) {
     private val logger = LoggerFactory.getLogger(ExecuteService::class.java)
-
-    // --- Nsjail Configuration ---
-    @Value("\${application.nsjail.path}")
-    private lateinit var nsjailPath: String
 
     // Semaphore to limit concurrent nsjail processes
     private val nsjailSemaphore =
@@ -82,7 +79,7 @@ class ExecuteService(
 
         var currentStatus = JobStatus.RECEIVED
         // This will store the 'action' part of the AI output
-        var action: String = ""
+        var action = ""
         var newMemoryData: String? = null // Raw from AI, Base64 encoded
         var memoryDataForRedis: String? = null // Validated memory data for Redis
 
@@ -124,6 +121,7 @@ class ExecuteService(
                     UUID.fromString(jobId),
                     aiOwnerUserId,
                     JobStatus.ERROR,
+                    null,
                     null, // newMemoryData
                     sessionId,
                     tickNumber
@@ -270,7 +268,7 @@ ${request.inputData}"""
             if (memoryDataForRedis != null && currentStatus != JobStatus.ERROR && nsjailResult.exitCode == 0) {
                 val redisKey = "session:${sessionId}:memory:${aiOwnerUserId}:${tickNumber}"
                 try {
-                    redisTemplate.opsForValue().set(redisKey, memoryDataForRedis!!, Duration.ofMinutes(memoryTtlMinutes))
+                    redisTemplate.opsForValue().set(redisKey, memoryDataForRedis, Duration.ofMinutes(memoryTtlMinutes))
                     logger.info(
                         "Stored new memory for job {} to Redis key {} with TTL {} mins",
                         jobId,
@@ -344,7 +342,7 @@ ${request.inputData}"""
             // Re-throw to ensure NACK
             throw e
         } finally {
-            val logFileKey = "logs/$userId/$jobId/nsjail.log"
+            val logFileKey = "logs/$aiOwnerUserId/$jobId/nsjail.log"
             var finalLogRef: String? = null
             if (Files.exists(logFile)) {
                 try {
@@ -394,9 +392,7 @@ ${request.inputData}"""
             withContext(Dispatchers.IO + NonCancellable) {
                 try {
                     if (Files.exists(executionDir)) {
-                        Files.walk(executionDir).sorted(Comparator.reverseOrder()).forEach {
-                            Files.deleteIfExists(it)
-                        }
+                        deleteDirectoryRecursively(executionDir)
                         logger.info(
                             "Cleaned up execution directory for job {}: {}",
                             jobId,
@@ -431,7 +427,7 @@ ${request.inputData}"""
         programName: String, // Relative path inside chroot (e.g., "program")
         request: ExecutionRequest, // Contains resource limits
     ): NsjailResult {
-
+        val nsjailPath = applicationConfig.nsjail.path
         val baseParameters = applicationConfig.nsjail.baseParameters
 
         val command = mutableListOf(nsjailPath)
@@ -702,10 +698,12 @@ ${request.inputData}"""
                             "CPU Time Limit Exceeded"
                         }
                     }
+
                     else -> "Time Limit Exceeded"
                 }
                 "$tleType. $exitInfo, $timeInfo, $memInfo"
             }
+
             JobStatus.MLE -> "Memory Limit Exceeded. $exitInfo, $timeInfo, $memInfo"
             JobStatus.RE -> "Runtime Error. $exitInfo, $timeInfo, $memInfo"
             JobStatus.OLE ->
@@ -732,32 +730,27 @@ ${request.inputData}"""
     ) {
         withContext(Dispatchers.IO) {
             try {
-                executionJobRepository
-                    .findById(UUID.fromString(jobId))
-                    .ifPresentOrElse(
-                        { job ->
-                            job.status = status
-                            if (startTime != null && job.startExecutionTime == null)
-                                job.startExecutionTime = startTime
-                            if (endTime != null) job.endExecutionTime = endTime
-                            if (programOutput != null)
-                                job.programOutput = programOutput // TODO: Add OLE check/truncation?
-                            job.cpuTimeSeconds = cpuTimeSeconds
-                            job.memoryKb = memoryKb
-                            job.exitCode = exitCode
-                            job.sandboxLogRef = sandboxLogRef
-                            job.errorDetails = errorDetails
-                            // job.workerNodeId = appConfig.workerId
-                            executionJobRepository.save(job)
-                            logger.info("Updated execution job {} status to {}", jobId, status)
-                        },
-                        {
-                            logger.error(
-                                "Could not find execution job with ID {} to update status.",
-                                jobId,
-                            )
-                        },
-                    )
+                val job = executionJobRepository.findById(UUID.fromString(jobId)).orElse(null)
+
+                if (job == null) {
+                    logger.error("Execution job with ID {} not found for status update.", jobId)
+                    return@withContext // Exit if job not found
+                }
+
+                job.status = status
+                if (startTime != null && job.startExecutionTime == null)
+                    job.startExecutionTime = startTime
+                if (endTime != null) job.endExecutionTime = endTime
+                if (programOutput != null)
+                    job.programOutput = programOutput // TODO: Add OLE check/truncation?
+                job.cpuTimeSeconds = cpuTimeSeconds
+                job.memoryKb = memoryKb
+                job.exitCode = exitCode
+                job.sandboxLogRef = sandboxLogRef
+                job.errorDetails = errorDetails
+                // job.workerNodeId = appConfig.workerId
+                executionJobRepository.save(job)
+                logger.info("Updated execution job {} status to {}", jobId, status)
             } catch (e: Exception) {
                 logger.error(
                     "Failed to update database for execution job {}: {}",
