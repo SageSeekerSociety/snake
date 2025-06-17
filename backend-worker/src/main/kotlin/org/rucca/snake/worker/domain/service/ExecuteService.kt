@@ -294,14 +294,27 @@ class ExecuteService(
                 }
             }
 
+            // Output the sandbox log for debugging
+            logger.debug(
+                "Nsjail log for job {}: {}",
+                jobId,
+                nsjailResult.logContent, // Limit log size for debug output
+            )
+
+            // Parse stats from log
+            val stats = parseCgroupStatsFromLog(nsjailResult.logContent)
+            cpuTimeSeconds = stats?.cpuTimeSeconds
+            memoryKb = stats?.memoryPeakKb
+
+            // Determine final status based on exit code, limits, and potentially signals
+            if (currentStatus != JobStatus.ERROR) {
+                currentStatus = determineFinalStatus(nsjailResult, request, stats)
+            }
+
             // Store New Memory to Redis (if valid and job was successful so far)
             // We check currentStatus before nsjail result processing, so if it's already ERROR
             // (e.g. from mem size check), don't store
-            if (
-                memoryDataForRedis != null &&
-                    currentStatus != JobStatus.ERROR &&
-                    nsjailResult.exitCode == 0
-            ) {
+            if (currentStatus == JobStatus.SUCCESS && memoryDataForRedis != null) {
                 val redisKey = "session:${sessionId}:memory:${aiOwnerUserId}:${tickNumber}"
                 try {
                     redisTemplate
@@ -329,23 +342,6 @@ class ExecuteService(
                     // We won't throw here to allow finally block to run, but status is ERROR.
                     // The existing resultNotifier in finally will pick up the ERROR status.
                 }
-            }
-
-            // Output the sandbox log for debugging
-            logger.debug(
-                "Nsjail log for job {}: {}",
-                jobId,
-                nsjailResult.logContent, // Limit log size for debug output
-            )
-
-            // Parse stats from log
-            val stats = parseCgroupStatsFromLog(nsjailResult.logContent)
-            cpuTimeSeconds = stats?.cpuTimeSeconds
-            memoryKb = stats?.memoryPeakKb
-
-            // Determine final status based on exit code, limits, and potentially signals
-            if (currentStatus != JobStatus.ERROR) {
-                currentStatus = determineFinalStatus(nsjailResult, request, stats)
             }
 
             if (currentStatus != JobStatus.SUCCESS) {
