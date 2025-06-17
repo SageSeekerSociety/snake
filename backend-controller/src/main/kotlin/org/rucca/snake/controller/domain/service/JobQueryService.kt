@@ -1,6 +1,6 @@
 package org.rucca.snake.controller.domain.service
 
-import java.util.UUID
+import java.util.*
 import kotlinx.coroutines.*
 import org.rucca.snake.common.infra.persistence.repository.CompilationJobRepository
 import org.rucca.snake.common.infra.persistence.repository.ExecutionJobRepository
@@ -19,8 +19,12 @@ class JobQueryService(
 ) {
     private val logger = LoggerFactory.getLogger(JobQueryService::class.java)
 
-    fun getJobIdsBySessionId(sessionId: UUID, userId: Long): List<UUID> {
-        val jobIds = executionJobRepository.findJobIdsBySessionIdAndUserId(sessionId, userId)
+    fun getJobIdsBySessionId(sessionId: UUID, requestingUserId: Long): List<UUID> {
+        val jobIds =
+            executionJobRepository.findJobIdsBySessionIdAndRequestingUserId(
+                sessionId,
+                requestingUserId,
+            )
         if (jobIds.isEmpty()) {
             return emptyList()
         }

@@ -318,6 +318,7 @@ class JobSubmitService(
                 submitTime = submitTime,
                 clientRequestId = item.clientRequestId,
                 sessionId = sessionUuid,
+                requestingUserId = requestingUserId,
             )
 
         // 2. Save to Database

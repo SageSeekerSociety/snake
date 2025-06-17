@@ -1,6 +1,6 @@
 package org.rucca.snake.controller.domain.service
 
-import java.util.UUID
+import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.minutes
 import kotlinx.coroutines.*
@@ -51,8 +51,11 @@ class JobFlowService(
         }
     }
 
-    fun getJobFlowsBySessionId(sessionId: UUID, userId: Long): List<SharedFlow<JobSseEvent>> {
-        return jobQueryService.getJobIdsBySessionId(sessionId, userId).map { jobId ->
+    fun getJobFlowsBySessionId(
+        sessionId: UUID,
+        requestingUserId: Long,
+    ): List<SharedFlow<JobSseEvent>> {
+        return jobQueryService.getJobIdsBySessionId(sessionId, requestingUserId).map { jobId ->
             getJobFlow(jobId)
         }
     }
