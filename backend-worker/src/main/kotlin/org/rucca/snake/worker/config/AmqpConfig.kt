@@ -13,6 +13,13 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.context.annotation.Primary
+import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory
+import org.springframework.amqp.rabbit.listener.RabbitListenerContainerFactory
+import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer
+import org.springframework.retry.interceptor.RetryInterceptorBuilder
+import org.springframework.retry.backoff.ExponentialBackOffPolicy
+import org.springframework.retry.policy.SimpleRetryPolicy
+import org.springframework.amqp.rabbit.retry.RejectAndDontRequeueRecoverer
 
 @Configuration
 class AmqpConfig {
@@ -44,6 +51,13 @@ class AmqpConfig {
     @Value("\${amqp.routingkey.result:result.notify}") private lateinit var resultRoutingKey: String
     @Value("\${amqp.queue.results:oj.results.notify}") // 添加对结果队列名的注入
     private lateinit var resultsQueueName: String
+
+    // --- Listener Configuration ---
+    @Value("\${amqp.listener.prefetch:10}") private val prefetchCount: Int = 10
+    @Value("\${amqp.listener.retry.initial-interval:1000}") private val retryInitialInterval: Long = 1000L
+    @Value("\${amqp.listener.retry.max-interval:10000}") private val retryMaxInterval: Long = 10000L
+    @Value("\${amqp.listener.retry.multiplier:2.0}") private val retryMultiplier: Double = 2.0
+    @Value("\${amqp.listener.retry.max-attempts:3}") private val retryMaxAttempts: Int = 3
 
     // --- 定义 Beans ---
 
@@ -189,5 +203,34 @@ class AmqpConfig {
         return DefaultMessagePropertiesConverter()
         // If you need custom property conversion logic in the future,
         // you could create your own class implementing MessagePropertiesConverter here.
+    }
+
+    @Bean("rabbitListenerContainerFactory")
+    fun rabbitListenerContainerFactory(
+        connectionFactory: ConnectionFactory,
+        jsonMessageConverter: MessageConverter, // Reuse the existing JSON converter
+    ): RabbitListenerContainerFactory<SimpleMessageListenerContainer> {
+        val factory = SimpleRabbitListenerContainerFactory()
+        factory.setConnectionFactory(connectionFactory)
+        factory.setMessageConverter(jsonMessageConverter)
+        factory.setPrefetchCount(prefetchCount) // Set prefetch count
+
+        // Configure retry mechanism
+        val retryInterceptor = RetryInterceptorBuilder.stateless()
+            .retryPolicy(SimpleRetryPolicy(retryMaxAttempts))
+            .backOffPolicy(
+                ExponentialBackOffPolicy().apply {
+                    initialInterval = retryInitialInterval
+                    maxInterval = retryMaxInterval
+                    multiplier = retryMultiplier
+                },
+            )
+            .recoverer(RejectAndDontRequeueRecoverer()) // Reject and don't requeue on failure
+            .build()
+
+        factory.setAdviceChain(retryInterceptor)
+        factory.setDefaultRequeueRejected(false) // Don't requeue rejected messages by default
+
+        return factory
     }
 }
