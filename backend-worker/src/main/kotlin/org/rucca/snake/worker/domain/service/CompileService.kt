@@ -1,5 +1,15 @@
 package org.rucca.snake.worker.domain.service
 
+import kotlinx.coroutines.*
+import org.rucca.snake.common.domain.exception.CompilationTimeoutException
+import org.rucca.snake.common.domain.model.CompilationRequest
+import org.rucca.snake.common.domain.model.JobStatus
+import org.rucca.snake.common.infra.persistence.repository.CompilationJobRepository
+import org.rucca.snake.worker.config.ApplicationConfig
+import org.rucca.snake.worker.infra.amqp.ResultNotifier
+import org.rucca.snake.worker.infra.storage.MinioService
+import org.slf4j.LoggerFactory
+import org.springframework.stereotype.Service
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -7,18 +17,6 @@ import java.nio.file.Paths
 import java.time.Instant
 import java.util.*
 import java.util.concurrent.TimeUnit
-import kotlin.Comparator
-import kotlinx.coroutines.*
-import org.rucca.snake.worker.config.ApplicationConfig
-import org.rucca.snake.common.domain.exception.CompilationTimeoutException
-import org.rucca.snake.common.domain.model.CompilationRequest
-import org.rucca.snake.common.domain.model.JobStatus
-import org.rucca.snake.common.infra.persistence.repository.CompilationJobRepository
-import org.rucca.snake.worker.infra.amqp.ResultNotifier
-import org.rucca.snake.worker.infra.storage.MinioService
-import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Value
-import org.springframework.stereotype.Service
 
 @Service
 class CompileService(
@@ -28,9 +26,6 @@ class CompileService(
     private val applicationConfig: ApplicationConfig,
 ) {
     private val logger = LoggerFactory.getLogger(CompileService::class.java)
-
-    @Value("\${application.compiler-path:/usr/bin/clang++}")
-    private lateinit var compilerPath: String
 
     private val compileTimeoutSeconds: Long = 60 // Default timeout for compilation in seconds
 
@@ -61,8 +56,8 @@ class CompileService(
 
         try {
             // 1. Update DB Status to COMPILING
-            updateJobStatus(jobId, JobStatus.COMPILING, startTime = startTime)
             currentStatus = JobStatus.COMPILING
+            updateJobStatus(jobId, currentStatus, startTime = startTime)
 
             // 2. Prepare compilation directory
             val compileDir: Path = withContext(Dispatchers.IO) {
@@ -78,7 +73,12 @@ class CompileService(
 
             // 3. Download Source Code from MinIO
             val downloadSuccess: Boolean = withContext(Dispatchers.IO) {
-                logger.info("Downloading source code for job {} from MinIO key '{}' to '{}'", jobId, sourceCodeRef, sourceFilePath)
+                logger.info(
+                    "Downloading source code for job {} from MinIO key '{}' to '{}'",
+                    jobId,
+                    sourceCodeRef,
+                    sourceFilePath
+                )
                 minioService.downloadObject(sourceCodeRef, sourceFilePath)
             }
 
@@ -159,7 +159,12 @@ class CompileService(
             )
 
             // 7. Notify Result via AMQP
-            resultNotifier.notifyCompilationResult(UUID.fromString(jobId), request.userId, currentStatus, programStorageRef)
+            resultNotifier.notifyCompilationResult(
+                UUID.fromString(jobId),
+                request.userId,
+                currentStatus,
+                programStorageRef
+            )
 
             // 8. Cleanup local compile directory
             cleanupCompileDir(userCompileDir, jobId)
@@ -171,6 +176,7 @@ class CompileService(
         sourceFile: Path,
         outputFile: Path,
     ): CompileCommandResult {
+        val compilerPath = applicationConfig.compilerPath
         val compilerParameters = applicationConfig.compilerParameter
         val command = mutableListOf(compilerPath)
         command.addAll(compilerParameters)
@@ -259,31 +265,43 @@ class CompileService(
         programStorageRef: String? = null,
         errorDetails: String? = null,
     ) {
-        withContext(Dispatchers.IO) { // Perform DB operations on IO dispatcher
+        // Perform DB operations on the IO dispatcher, which is designed for blocking calls.
+        withContext(Dispatchers.IO) {
             try {
-                compilationJobRepository
-                    .findById(UUID.fromString(jobId))
-                    .ifPresentOrElse(
-                        { job ->
-                            job.status = status
-                            if (startTime != null && job.startCompileTime == null)
-                                job.startCompileTime = startTime // Set start time only once
-                            if (endTime != null) job.endCompileTime = endTime
-                            if (compilerOutput != null)
-                                job.compilerOutput = compilerOutput // Update compiler output
-                            if (programStorageRef != null) job.programStorageRef = programStorageRef
-                            if (errorDetails != null) job.errorDetails = errorDetails
-                            // Fetch worker ID if needed
-                            // job.workerNodeId = appConfig.workerId
-                            compilationJobRepository.save(job)
-                            logger.info("Updated job {} status to {}", jobId, status)
-                        },
-                        {
-                            logger.error("Could not find job with ID {} to update status.", jobId)
-                            // This case should ideally not happen if producer creates the record
-                            // first
-                        },
-                    )
+                // Find the job by its ID. orElse(null) is more idiomatic with Kotlin's null safety.
+                val job = compilationJobRepository.findById(UUID.fromString(jobId)).orElse(null)
+
+                if (job == null) {
+                    logger.error("Could not find job with ID {} to update status.", jobId)
+                    return@withContext // Exit if job is not found
+                }
+
+                // Use 'apply' for cleaner property updates on the entity object.
+                job.apply {
+                    this.status = status
+                    if (startTime != null && this.startCompileTime == null) {
+                        this.startCompileTime = startTime // Set start time only once
+                    }
+                    if (endTime != null) {
+                        this.endCompileTime = endTime
+                    }
+                    if (compilerOutput != null) {
+                        this.compilerOutput = compilerOutput // Update compiler output
+                    }
+                    if (programStorageRef != null) {
+                        this.programStorageRef = programStorageRef
+                    }
+                    if (errorDetails != null) {
+                        this.errorDetails = errorDetails
+                    }
+                    // Fetch worker ID if needed
+                    // this.workerNodeId = appConfig.workerId
+                }
+
+                // Save the updated job entity. This is a blocking call.
+                compilationJobRepository.save(job)
+                logger.info("Updated job {} status to {}", jobId, status)
+
             } catch (e: Exception) {
                 logger.error("Failed to update database for job {}: {}", jobId, e.message, e)
                 // This is problematic. If DB update fails, the job state might be inconsistent.
@@ -292,15 +310,27 @@ class CompileService(
         }
     }
 
+    /**
+     * A regular (non-suspend) function to encapsulate the blocking file IO.
+     * This helps in silencing linter warnings about blocking calls in coroutines.
+     */
+    private fun deleteDirectoryRecursively(dir: Path) {
+        if (Files.exists(dir)) {
+            // The blocking logic is now contained in a standard function.
+            Files.walk(dir)
+                .use { stream ->
+                    stream.sorted(Comparator.reverseOrder())
+                        .forEach { Files.deleteIfExists(it) }
+                }
+        }
+    }
+
     private suspend fun cleanupCompileDir(dir: Path, jobId: String) {
         withContext(Dispatchers.IO + NonCancellable) {
             try {
-                if (Files.exists(dir)) {
-                    Files.walk(dir)
-                        .sorted(Comparator.reverseOrder())
-                        .forEach { Files.deleteIfExists(it) }
-                    logger.info("Cleaned up compile directory for job {}: {}", jobId, dir)
-                }
+                // The suspend function now calls the non-suspend, blocking helper.
+                deleteDirectoryRecursively(dir)
+                logger.info("Cleaned up compile directory for job {}: {}", jobId, dir)
             } catch (e: Exception) {
                 logger.error("Failed to cleanup compile directory for job {}: {}", jobId, e.message)
             }

@@ -215,6 +215,7 @@ class AmqpConfig {
         factory.setConnectionFactory(connectionFactory)
         factory.setMessageConverter(jsonMessageConverter)
         factory.setPrefetchCount(prefetchCount) // Set prefetch count
+        factory.setAcknowledgeMode(AcknowledgeMode.MANUAL)
 
         // Define a MethodInvocationRecoverer that throws AmqpRejectAndDontRequeueException
         val recoverer = MethodInvocationRecoverer<Unit> { args, cause ->
