@@ -95,7 +95,12 @@ class JobResultController(private val jobQueryService: JobQueryService) {
             logger.debug("Returning batch results for {} valid job IDs.", jobUUIDs.size)
             return ResponseEntity.ok(ApiResponse.Success<Any>(data = results)) // Return directly
         } catch (e: Exception) {
-            logger.error("Error during batch job query for IDs: {}", jobIdsStr, e.message, e)
+            logger.error(
+                "Error during batch job query for IDs: {}, error: {}",
+                jobIdsStr,
+                e.message,
+                e,
+            )
             throw e
         }
     }

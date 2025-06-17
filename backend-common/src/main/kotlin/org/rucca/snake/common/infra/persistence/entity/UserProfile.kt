@@ -1,9 +1,9 @@
 package org.rucca.snake.common.infra.persistence.entity
 
 import jakarta.persistence.*
+import java.time.OffsetDateTime
 import org.hibernate.annotations.ColumnDefault
 import org.hibernate.annotations.SQLRestriction
-import java.time.OffsetDateTime
 
 @Entity
 @Table(

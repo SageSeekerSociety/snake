@@ -22,10 +22,8 @@ data class CompilationJob(
     @Column(nullable = false)
     var status: JobStatus = JobStatus.PENDING,
     @Column(nullable = false) var submitTime: Instant = Instant.now(),
-
     @Column(length = 1024, nullable = false) // Make reference mandatory for compilation
-    var sourceCodeRef: String = "",          // Reference to source code (e.g., MinIO key)
-
+    var sourceCodeRef: String = "", // Reference to source code (e.g., MinIO key)
     var receiveTime: Instant? = null,
     var startCompileTime: Instant? = null,
     var endCompileTime: Instant? = null,

@@ -7,5 +7,5 @@ data class CompilationResultNotification(
     val userId: Long,
     val status: JobStatus,
     val compiledProgramRef: String?,
-    val timestamp: Instant
+    val timestamp: Instant,
 )
