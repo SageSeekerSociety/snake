@@ -288,12 +288,16 @@ class JobSubmitService(
     }
 
     /**
-     * Internal transactional method to submit a single execution task. Separated to allow
-     * individual transaction management for batch items.
+     * Submits a single execution job, persisting it and sending the execution request to RabbitMQ within its own transaction.
      *
-     * @param item The single execution request item.
-     * @return The created ExecutionJob entity.
-     * @throws DataAccessException, AmqpException, RuntimeException on failure.
+     * @param item The execution request details.
+     * @param finalSessionId The session ID associated with the execution.
+     * @param requestingUserId The ID of the user initiating the request.
+     * @return The persisted ExecutionJob entity.
+     * @throws IllegalArgumentException If the session ID format is invalid.
+     * @throws DataAccessException If saving the job to the database fails.
+     * @throws AmqpException If sending the execution request to RabbitMQ fails.
+     * @throws RuntimeException For unexpected errors during database or messaging operations.
      */
     @Transactional // Each execution submission gets its own transaction
     internal suspend fun submitSingleExecutionInternal(
