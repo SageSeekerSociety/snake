@@ -135,6 +135,18 @@ class ExecuteService(
             }
         }
 
+        val decodedPreviousMemory =
+            try {
+                if (previousMemoryData.isNotBlank()) Base64.getDecoder().decode(previousMemoryData)
+                else byteArrayOf()
+            } catch (e: IllegalArgumentException) {
+                logger.warn(
+                    "Previous memory data for job {} is not valid Base64, using empty.",
+                    jobId,
+                )
+                byteArrayOf()
+            }
+
         try {
             // 1. Update DB Status to RUNNING
             updateJobStatus(jobId, JobStatus.RUNNING, startTime = startTime)
@@ -199,10 +211,9 @@ class ExecuteService(
             // 4. Prepare Input File
             withContext(Dispatchers.IO) {
                 try {
-                    val aiInputContent =
-                        """${request.inputData}
-$previousMemoryData"""
-                    Files.writeString(inputFile, aiInputContent)
+                    val aiInputContentBytes =
+                        request.inputData.toByteArray() + "\n".toByteArray() + decodedPreviousMemory
+                    Files.write(inputFile, aiInputContentBytes)
                     logger.info("Prepared input file for job {} at {}", jobId, inputFile)
                 } catch (e: IOException) {
                     logger.error("Failed to write input file for job {}: {}", jobId, e.message)
@@ -234,23 +245,25 @@ $previousMemoryData"""
             // programOutput = nsjailResult.output // Old way
             sandboxLogContent = nsjailResult.logContent // Store for potential use/debugging
 
+            var rawMemoryFromAI: String? = null
             if (nsjailResult.output.isNotBlank()) {
                 val lines = nsjailResult.output.lines()
                 action = lines.firstOrNull()?.trim() ?: ""
                 if (lines.size > 1) {
-                    newMemoryData = lines.drop(1).joinToString(separator = "\n").trim()
-                    if (newMemoryData.isEmpty()) newMemoryData = null
+                    rawMemoryFromAI = lines.drop(1).joinToString(separator = "\n")
                 }
             }
             logger.info(
                 "Job {}: Parsed Action='{}', NewMemoryData (raw from AI)='{}'",
                 jobId,
                 action,
-                newMemoryData?.take(100),
+                rawMemoryFromAI?.take(100),
             )
+            newMemoryData =
+                rawMemoryFromAI?.let { Base64.getEncoder().encodeToString(it.toByteArray()) }
 
             // Memory Size Limit Check (before storing to Redis)
-            memoryDataForRedis = newMemoryData // Assume it's valid initially
+            memoryDataForRedis = newMemoryData
             if (newMemoryData != null) {
                 try {
                     val decodedBytes = Base64.getDecoder().decode(newMemoryData)
