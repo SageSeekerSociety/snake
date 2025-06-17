@@ -19,6 +19,13 @@ class JobQueryService(
 ) {
     private val logger = LoggerFactory.getLogger(JobQueryService::class.java)
 
+    /**
+     * Retrieves a list of execution job IDs associated with the specified session and requesting user.
+     *
+     * @param sessionId The UUID of the session to query.
+     * @param requestingUserId The ID of the user requesting the job IDs.
+     * @return A list of job UUIDs for the given session and user, or an empty list if none are found.
+     */
     fun getJobIdsBySessionId(sessionId: UUID, requestingUserId: Long): List<UUID> {
         val jobIds =
             executionJobRepository.findJobIdsBySessionIdAndRequestingUserId(

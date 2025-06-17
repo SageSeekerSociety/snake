@@ -31,8 +31,12 @@ class JobFlowService(
     private val flowTimeout = 5.minutes
 
     /**
-     * Creates or retrieves a SharedFlow for a given Job ID. This should be called when a job is
-     * submitted or an SSE connection requests it.
+     * Returns a SharedFlow for the specified job ID, creating it if it does not already exist.
+     *
+     * Ensures that only one flow exists per job. The flow replays all past events to new subscribers and is suitable for use with Server-Sent Events (SSE) clients.
+     *
+     * @param jobId The unique identifier of the job.
+     * @return A SharedFlow emitting job events for the given job ID.
      */
     fun getJobFlow(jobId: UUID): SharedFlow<JobSseEvent> {
         // Compute if absent to ensure only one flow per jobId
@@ -51,6 +55,13 @@ class JobFlowService(
         }
     }
 
+    /**
+     * Retrieves all job event flows associated with a given session and requesting user.
+     *
+     * @param sessionId The session identifier to query jobs for.
+     * @param requestingUserId The user requesting the job flows.
+     * @return A list of shared flows, each emitting events for a specific job in the session.
+     */
     fun getJobFlowsBySessionId(
         sessionId: UUID,
         requestingUserId: Long,
