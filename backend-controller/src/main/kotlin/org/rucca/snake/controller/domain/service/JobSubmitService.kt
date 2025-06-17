@@ -262,6 +262,14 @@ class JobSubmitService(
                         eventType = "SUBMITTED",
                         status = JobStatus.SUBMITTED, // Assuming internal method updates status
                         message = "Execution job submitted.",
+                        data =
+                            mapOf(
+                                "userId" to item.userId,
+                                "clientRequestId" to item.clientRequestId,
+                                "tickNumber" to item.tickNumber,
+                                "sessionId" to finalSessionId,
+                                "requestingUserId" to requestingUserId,
+                            ),
                     ),
                 )
                 results[resultKey] =
@@ -279,6 +287,13 @@ class JobSubmitService(
                     jobFlowService.publishError(
                         failedJobId,
                         "Failed during submission process: ${e.message}",
+                        mapOf(
+                            "userId" to item.userId,
+                            "clientRequestId" to item.clientRequestId,
+                            "tickNumber" to item.tickNumber,
+                            "sessionId" to finalSessionId,
+                            "requestingUserId" to requestingUserId,
+                        ),
                     )
                 }
                 results[resultKey] = Result.failure(e) // Return failure with exception
@@ -323,6 +338,7 @@ class JobSubmitService(
                 submitTime = submitTime,
                 clientRequestId = item.clientRequestId,
                 sessionId = sessionUuid,
+                tickNumber = item.tickNumber,
                 requestingUserId = requestingUserId,
             )
 

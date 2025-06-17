@@ -15,8 +15,8 @@ import org.rucca.snake.common.domain.model.JobStatus
             Index(name = "idx_execution_jobs_submit_time", columnList = "submitTime"),
             Index(name = "idx_execution_jobs_session_user", columnList = "sessionId, userId"),
             Index(
-                name = "idx_execution_jobs_session_requesting_user",
-                columnList = "sessionId, requestingUserId",
+                name = "idx_execution_jobs_session_tick_requesting_user",
+                columnList = "sessionId, tickNumber, requestingUserId",
             ),
         ],
 )
@@ -39,5 +39,6 @@ data class ExecutionJob(
     @Column(length = 255) var clientRequestId: String? = null,
     @Lob @Column(columnDefinition = "TEXT") var errorDetails: String? = null,
     @Column(columnDefinition = "uuid") var sessionId: UUID? = null,
+    var tickNumber: Int = 0, // Tick number for the job, useful for tracking in game-like scenarios
     var requestingUserId: Long? = null, // User who requested the job, if different from owner
 )
