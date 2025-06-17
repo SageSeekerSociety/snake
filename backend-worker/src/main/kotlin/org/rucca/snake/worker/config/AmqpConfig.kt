@@ -19,7 +19,8 @@ import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer
 import org.springframework.retry.interceptor.RetryInterceptorBuilder
 import org.springframework.retry.backoff.ExponentialBackOffPolicy
 import org.springframework.retry.policy.SimpleRetryPolicy
-import org.springframework.amqp.rabbit.retry.RejectAndDontRequeueRecoverer
+import org.springframework.amqp.AmqpRejectAndDontRequeueException // Import this
+import org.springframework.retry.interceptor.MethodInvocationRecoverer // Import this
 
 @Configuration
 class AmqpConfig {
@@ -215,6 +216,15 @@ class AmqpConfig {
         factory.setMessageConverter(jsonMessageConverter)
         factory.setPrefetchCount(prefetchCount) // Set prefetch count
 
+        // Define a MethodInvocationRecoverer that throws AmqpRejectAndDontRequeueException
+        val recoverer = MethodInvocationRecoverer<Unit> { args, cause ->
+            // args[0] is the Message for our listeners
+            // Optional: Log here if specific logging for recovery is needed
+            // val message = args.firstOrNull { it is Message } as? Message
+            // logger.warn("Message recovery after retries for message: ${message?.messageProperties?.correlationId}", cause)
+            throw AmqpRejectAndDontRequeueException("Failed after max retries.", cause)
+        }
+
         // Configure retry mechanism
         val retryInterceptor = RetryInterceptorBuilder.stateless()
             .retryPolicy(SimpleRetryPolicy(retryMaxAttempts))
@@ -225,11 +235,14 @@ class AmqpConfig {
                     multiplier = retryMultiplier
                 },
             )
-            .recoverer(RejectAndDontRequeueRecoverer()) // Reject and don't requeue on failure
+            .recoverer(recoverer) // Use the custom MethodInvocationRecoverer
             .build()
 
         factory.setAdviceChain(retryInterceptor)
-        factory.setDefaultRequeueRejected(false) // Don't requeue rejected messages by default
+        // Ensure messages are not requeued by default if an exception escapes the advice chain
+        // or if no recoverer was configured/matched.
+        // AmqpRejectAndDontRequeueException thrown by our recoverer achieves this specifically.
+        factory.setDefaultRequeueRejected(false)
 
         return factory
     }
