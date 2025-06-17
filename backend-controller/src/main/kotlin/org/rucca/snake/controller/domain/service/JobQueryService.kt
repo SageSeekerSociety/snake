@@ -1,6 +1,6 @@
 package org.rucca.snake.controller.domain.service
 
-import java.util.UUID
+import java.util.*
 import kotlinx.coroutines.*
 import org.rucca.snake.common.infra.persistence.repository.CompilationJobRepository
 import org.rucca.snake.common.infra.persistence.repository.ExecutionJobRepository
@@ -19,8 +19,21 @@ class JobQueryService(
 ) {
     private val logger = LoggerFactory.getLogger(JobQueryService::class.java)
 
-    fun getJobIdsBySessionId(sessionId: UUID, userId: Long): List<UUID> {
-        val jobIds = executionJobRepository.findJobIdsBySessionIdAndUserId(sessionId, userId)
+    /**
+     * Retrieves a list of execution job IDs associated with the specified session and requesting
+     * user.
+     *
+     * @param sessionId The UUID of the session to query.
+     * @param requestingUserId The ID of the user requesting the job IDs.
+     * @return A list of job UUIDs for the given session and user, or an empty list if none are
+     *   found.
+     */
+    fun getJobIdsBySessionId(sessionId: UUID, requestingUserId: Long): List<UUID> {
+        val jobIds =
+            executionJobRepository.findJobIdsBySessionIdAndRequestingUserId(
+                sessionId,
+                requestingUserId,
+            )
         if (jobIds.isEmpty()) {
             return emptyList()
         }

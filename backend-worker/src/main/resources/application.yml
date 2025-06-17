@@ -21,8 +21,8 @@ spring:
       ddl-auto: validate # 生产环境推荐使用 validate 或 none，通过 Flyway/Liquibase 管理 Schema
   data:
     redis:
-      host: localhost # Or your Redis host
-      port: 6379 # Or your Redis port
+      host: ${REDIS_HOST:localhost} # Or your Redis host
+      port: ${REDIS_PORT:6379} # Or your Redis port
       # password: your-password # Uncomment and set if your Redis has a password
       # timeout: 60000 # Connection timeout
 
