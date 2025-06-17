@@ -62,7 +62,7 @@ class ExecuteService(
         val sessionId = request.sessionId
         val tickNumber = request.tickNumber
         // val requestingUserId = request.currentUserId // Available if needed
-        val aiOwnerUserId = request.userId // Use this for memory keys and job ownership
+        val aiOwnerUserId = request.aiOwnerUserId // Use this for memory keys and job ownership
 
         val userDataDir =
             Paths.get(
@@ -247,19 +247,30 @@ ${request.inputData}"""
             // Memory Size Limit Check (before storing to Redis)
             memoryDataForRedis = newMemoryData // Assume it's valid initially
             if (newMemoryData != null) {
-                val memorySizeBytes =
-                    newMemoryData.toByteArray().size // Size of the Base64 string itself in bytes
-                if (memorySizeBytes > memoryMaxSizeKb * 1024) {
+                try {
+                    val decodedBytes = Base64.getDecoder().decode(newMemoryData)
+                    val memorySizeBytes = decodedBytes.size
+                    if (memorySizeBytes > memoryMaxSizeKb * 1024) {
+                        logger.warn(
+                            "Job {}: New memory data (decoded {} bytes) exceeds limit of {} KB. Discarding memory.",
+                            jobId,
+                            memorySizeBytes,
+                            memoryMaxSizeKb
+                        )
+                        currentStatus =
+                            JobStatus.ERROR // Or a custom status like JobStatus.MEMORY_LIMIT_USER
+                        errorDetails = (errorDetails ?: "") + " Produced memory data exceeded size limit."
+                        memoryDataForRedis = null // Do not store oversized memory
+                    }
+                } catch (e: IllegalArgumentException) {
                     logger.warn(
-                        "Job {}: New memory data ({} bytes) exceeds limit of {} KB. Discarding memory.",
+                        "Job {}: New memory data is not valid Base64. Discarding memory. Error: {}",
                         jobId,
-                        memorySizeBytes,
-                        memoryMaxSizeKb
+                        e.message
                     )
-                    currentStatus =
-                        JobStatus.ERROR // Or a custom status like JobStatus.MEMORY_LIMIT_USER
-                    errorDetails = (errorDetails ?: "") + " Produced memory data exceeded size limit."
-                    memoryDataForRedis = null // Do not store oversized memory
+                    currentStatus = JobStatus.ERROR
+                    errorDetails = (errorDetails ?: "") + " Produced memory data is not valid Base64."
+                    memoryDataForRedis = null
                 }
             }
 

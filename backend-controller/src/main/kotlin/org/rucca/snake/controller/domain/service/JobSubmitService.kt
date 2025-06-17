@@ -305,6 +305,9 @@ class JobSubmitService(
         val submitTime = Instant.now()
 
         // 1. Create Job Entity
+        val sessionUuid = runCatching { UUID.fromString(finalSessionId) }.getOrElse {
+            throw IllegalArgumentException("Invalid sessionId format: $finalSessionId", it)
+        }
         val executionJob =
             ExecutionJob(
                 jobId = jobId,
@@ -312,7 +315,7 @@ class JobSubmitService(
                 status = JobStatus.PENDING,
                 submitTime = submitTime,
                 clientRequestId = item.clientRequestId,
-                sessionId = UUID.fromString(finalSessionId),
+                sessionId = sessionUuid,
             )
 
         // 2. Save to Database
@@ -346,7 +349,7 @@ class JobSubmitService(
         val request =
             ExecutionRequest(
                 jobId = jobId.toString(),
-                userId = item.userId,
+                aiOwnerUserId = item.userId,
                 inputData = item.inputData, // Consider reference if large
                 cpuTimeLimitSeconds = item.cpuTimeLimitSeconds,
                 memoryLimitKb = item.memoryLimitKb,
@@ -356,7 +359,7 @@ class JobSubmitService(
                 // New fields
                 sessionId = finalSessionId,
                 tickNumber = item.tickNumber,
-                currentUserId = requestingUserId, // User who made the HTTP call
+                requestingUserId = requestingUserId, // User who made the HTTP call
             )
 
         // 4. Send to RabbitMQ

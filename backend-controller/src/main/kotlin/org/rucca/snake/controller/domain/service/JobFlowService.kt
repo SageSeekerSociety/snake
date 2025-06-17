@@ -51,7 +51,7 @@ class JobFlowService(
         }
     }
 
-    fun getJobFlowsBySessionId(sessionId: String, userId: Long): List<SharedFlow<JobSseEvent>> {
+    fun getJobFlowsBySessionId(sessionId: UUID, userId: Long): List<SharedFlow<JobSseEvent>> {
         return jobQueryService.getJobIdsBySessionId(sessionId, userId).map { jobId ->
             getJobFlow(jobId)
         }

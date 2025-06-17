@@ -1,17 +1,13 @@
 package org.rucca.snake.controller.domain.controller
 
 import jakarta.annotation.PreDestroy
-import java.io.IOException
-import java.time.Duration
-import java.util.*
-import kotlin.coroutines.cancellation.CancellationException
-import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.*
 import org.rucca.cheese.auth.AuthenticationService
 import org.rucca.cheese.auth.annotation.Guard
 import org.rucca.snake.controller.domain.model.ApiError
 import org.rucca.snake.controller.domain.model.ApiResponse
 import org.rucca.snake.controller.domain.service.JobFlowService
+import org.rucca.snake.controller.domain.service.JobQueryService
 import org.rucca.snake.controller.domain.service.JobSubmitService
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
@@ -20,6 +16,11 @@ import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import org.springframework.web.multipart.MultipartFile
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter
+import java.io.IOException
+import java.time.Duration
+import java.util.*
+import kotlin.coroutines.cancellation.CancellationException
+import kotlin.time.Duration.Companion.seconds
 
 @RestController
 @RequestMapping("/compile")
@@ -27,6 +28,7 @@ class CompileController(
     private val jobSubmitService: JobSubmitService,
     private val jobFlowService: JobFlowService,
     private val authenticationService: AuthenticationService,
+    private val jobQueryService: JobQueryService,
 ) {
     private val logger = LoggerFactory.getLogger(CompileController::class.java)
 
@@ -63,8 +65,8 @@ class CompileController(
                 val responseData = mapOf("jobId" to compilationJob.jobId.toString())
                 logger.info("Successfully submitted compilation job: {}", compilationJob.jobId)
                 ResponseEntity.status(
-                        HttpStatus.ACCEPTED
-                    ) // Use 202 Accepted for async job submission
+                    HttpStatus.ACCEPTED
+                ) // Use 202 Accepted for async job submission
                     .body(
                         ApiResponse.Success<Any>(
                             code = 202,
@@ -94,12 +96,25 @@ class CompileController(
 
         logger.info("SSE connection requested for compile job ID: {} by user {}", jobId, userId)
 
-        val jobUUID: UUID
-        try {
-            jobUUID = UUID.fromString(jobId)
-        } catch (e: IllegalArgumentException) {
-            logger.warn("Invalid UUID format for job ID from client: {}", jobId)
-            emitter.completeWithError(e)
+        val jobUUID = runCatching {
+            UUID.fromString(jobId)
+        }.getOrElse { e ->
+            logger.warn("Invalid UUID format for job ID from client: {}", jobId, e)
+            emitter.completeWithError(
+                IllegalArgumentException("Invalid job ID format: $jobId", e),
+            )
+            return emitter
+        }
+
+        if (!jobQueryService.isOwnerOfCompilationJob(jobUUID, userId)) {
+            logger.warn(
+                "Unauthorized SSE access attempt for job {} by user {}",
+                jobUUID,
+                userId,
+            )
+            emitter.completeWithError(
+                IllegalArgumentException("You do not have permission to access this job."),
+            )
             return emitter
         }
 
@@ -143,7 +158,8 @@ class CompileController(
                 logger.error("Failed to establish SSE stream for job {}: {}", jobUUID, e.message, e)
                 try {
                     emitter.completeWithError(e)
-                } catch (_: Exception) {}
+                } catch (_: Exception) {
+                }
             } finally {
                 emitter.onCompletion { collectingJob?.cancel("Emitter completed") }
                 emitter.onTimeout { collectingJob?.cancel("Emitter timed out") }

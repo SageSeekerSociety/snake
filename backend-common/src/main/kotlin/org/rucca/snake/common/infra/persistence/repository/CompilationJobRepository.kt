@@ -8,4 +8,6 @@ import org.springframework.stereotype.Repository
 @Repository
 interface CompilationJobRepository : JpaRepository<CompilationJob, UUID> {
     fun findByUserIdOrderBySubmitTimeDesc(userId: Long): List<CompilationJob>
+
+    fun existsByJobIdAndUserId(jobId: UUID, userId: Long): Boolean
 }

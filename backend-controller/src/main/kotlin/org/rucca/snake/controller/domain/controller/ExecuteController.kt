@@ -85,9 +85,10 @@ class ExecuteController(
             }
 
             val finalSessionId = firstSessionId ?: UUID.randomUUID().toString()
+            val finalRequests = requests.map { it.copy(sessionId = finalSessionId) }
 
             val results: Map<String, Result<String>> =
-                jobSubmitService.submitBatchExecution(requests, finalSessionId, currentUserId)
+                jobSubmitService.submitBatchExecution(finalRequests, finalSessionId, currentUserId)
 
             val responseDataPayload =
                 mapOf(
@@ -134,12 +135,25 @@ class ExecuteController(
     fun streamBatchExecutionEvents(@PathVariable sessionId: String): SseEmitter {
         logger.info("SSE stream connection requested for session ID: {}", sessionId)
         val emitter = SseEmitter(sseTimeout)
+        var collectingJob: Job? = null
+
+        emitter.onCompletion { collectingJob?.cancel("Emitter completed") }
+        emitter.onTimeout { collectingJob?.cancel("Emitter timed out") }
+        emitter.onError { err -> collectingJob?.cancel("Emitter error: ${err?.message}") }
+
         val currentUserId = getCurrentUserId()
 
+        val sessionIdAsUUID = runCatching {
+            UUID.fromString(sessionId)
+        }.getOrElse {
+            logger.warn("Invalid UUID format for session ID from client: {}", sessionId)
+            emitter.completeWithError(it)
+            return emitter
+        }
+
         controllerScope.launch {
-            var collectingJob: Job? = null
             try {
-                val flowsToMerge = jobFlowService.getJobFlowsBySessionId(sessionId, currentUserId)
+                val flowsToMerge = jobFlowService.getJobFlowsBySessionId(sessionIdAsUUID, currentUserId)
 
                 if (flowsToMerge.isEmpty()) {
                     logger.warn(
@@ -220,10 +234,6 @@ class ExecuteController(
                 try {
                     emitter.completeWithError(e)
                 } catch (_: Exception) {}
-            } finally {
-                emitter.onCompletion { collectingJob?.cancel("Emitter completed") }
-                emitter.onTimeout { collectingJob?.cancel("Emitter timed out") }
-                emitter.onError { err -> collectingJob?.cancel("Emitter error: ${err?.message}") }
             }
         }
         return emitter
