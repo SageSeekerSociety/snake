@@ -288,7 +288,8 @@ class JobSubmitService(
     }
 
     /**
-     * Submits a single execution job, persisting it and sending the execution request to RabbitMQ within its own transaction.
+     * Submits a single execution job, persisting it and sending the execution request to RabbitMQ
+     * within its own transaction.
      *
      * @param item The execution request details.
      * @param finalSessionId The session ID associated with the execution.

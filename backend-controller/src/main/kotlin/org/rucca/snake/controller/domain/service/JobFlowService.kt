@@ -33,7 +33,8 @@ class JobFlowService(
     /**
      * Returns a SharedFlow for the specified job ID, creating it if it does not already exist.
      *
-     * Ensures that only one flow exists per job. The flow replays all past events to new subscribers and is suitable for use with Server-Sent Events (SSE) clients.
+     * Ensures that only one flow exists per job. The flow replays all past events to new
+     * subscribers and is suitable for use with Server-Sent Events (SSE) clients.
      *
      * @param jobId The unique identifier of the job.
      * @return A SharedFlow emitting job events for the given job ID.
