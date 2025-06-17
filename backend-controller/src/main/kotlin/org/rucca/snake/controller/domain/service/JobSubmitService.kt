@@ -237,7 +237,9 @@ class JobSubmitService(
      *   Result indicating success (Ok containing jobId) or failure (Err containing error message).
      */
     suspend fun submitBatchExecution(
-        requests: List<BatchExecutionItem>
+        requests: List<BatchExecutionItem>,
+        finalSessionId: String,
+        requestingUserId: Long,
     ): Map<String, Result<String>> {
         val results = mutableMapOf<String, Result<String>>()
         val submittedJobIds = mutableListOf<UUID>()
@@ -249,7 +251,8 @@ class JobSubmitService(
             var submittedJobId: UUID? = null
             try {
                 // Call a separate transactional method for each item
-                val executionJob = submitSingleExecutionInternal(item)
+                val executionJob =
+                    submitSingleExecutionInternal(item, finalSessionId, requestingUserId)
                 submittedJobId = executionJob.jobId
                 jobFlowService.getJobFlow(submittedJobId)
                 jobFlowService.publishEvent(
@@ -293,7 +296,11 @@ class JobSubmitService(
      * @throws DataAccessException, AmqpException, RuntimeException on failure.
      */
     @Transactional // Each execution submission gets its own transaction
-    internal suspend fun submitSingleExecutionInternal(item: BatchExecutionItem): ExecutionJob {
+    internal suspend fun submitSingleExecutionInternal(
+        item: BatchExecutionItem,
+        finalSessionId: String,
+        requestingUserId: Long,
+    ): ExecutionJob {
         val jobId = UUID.randomUUID()
         val submitTime = Instant.now()
 
@@ -345,9 +352,12 @@ class JobSubmitService(
                 cpuTimeLimitSeconds = item.cpuTimeLimitSeconds,
                 memoryLimitKb = item.memoryLimitKb,
                 wallTimeLimitSeconds = item.wallTimeLimitSeconds,
-                // clientRequestId = item.clientRequestId, // Can pass through if needed by
-                // worker/result
+                clientRequestId = item.clientRequestId, // Pass through
                 timestamp = submitTime,
+                // New fields
+                sessionId = finalSessionId,
+                tickNumber = item.tickNumber,
+                currentUserId = requestingUserId, // User who made the HTTP call
             )
 
         // 4. Send to RabbitMQ

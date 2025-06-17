@@ -126,13 +126,24 @@ class ResultListener(
                             notification.status,
                         )
                         // Publish intermediate status update
+                        // Construct detailed event data
+                        val eventData = mapOf(
+                            "action" to notification.action,
+                            "sessionId" to notification.sessionId,
+                            "tickNumber" to notification.tickNumber,
+                            "aiUserId" to notification.userId,
+                            "newMemoryData" to notification.newMemoryData,
+                            // "errorDetails" to notification.errorDetails, // If errorDetails were added to notification DTO
+                        )
+
                         jobFlowService.publishEvent(
                             jobUUID,
                             JobSseEvent(
                                 jobId = correlationId,
-                                eventType = "STATUS_UPDATE",
+                                eventType = if (finalStatus == JobStatus.SUCCESS) "EXECUTION_SUCCESS" else "EXECUTION_FAILURE",
                                 status = finalStatus,
-                                message = "Execution finished with status: $finalStatus",
+                                message = "Execution finished with status: $finalStatus. Action: ${notification.action}",
+                                data = eventData,
                             ),
                         )
                         // Optional: Handle execution results (e.g., disable player)

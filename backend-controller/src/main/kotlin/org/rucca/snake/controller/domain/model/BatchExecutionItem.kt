@@ -11,4 +11,6 @@ data class BatchExecutionItem(
     // to correlate this specific item back in the batch response.
     // If not provided, the backend might generate one or use index.
     val clientRequestId: String? = null,
+    val sessionId: String? = null,
+    val tickNumber: Int,
 )

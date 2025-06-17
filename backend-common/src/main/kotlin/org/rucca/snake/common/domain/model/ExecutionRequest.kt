@@ -11,4 +11,7 @@ data class ExecutionRequest(
     val wallTimeLimitSeconds: Long, // 墙上时间限制 (秒)
     val clientRequestId: String? = null,
     val timestamp: Instant = Instant.now(), // 提交时间
+    val sessionId: String,
+    val tickNumber: Int,
+    val currentUserId: Long,
 )

@@ -41,6 +41,18 @@ class ExecuteController(
     private val controllerScope =
         CoroutineScope(Dispatchers.Default + SupervisorJob() + CoroutineName("CompileController"))
 
+    // Placeholder for getting current user ID
+    private fun getCurrentUserId(): Long {
+        // In a real application, this would be retrieved from Spring Security Context
+        // For example:
+        // val authentication = SecurityContextHolder.getContext().authentication
+        // if (authentication != null && authentication.principal is CustomUserDetails) {
+        //     return (authentication.principal as CustomUserDetails).id
+        // }
+        // return -1L // Or throw an exception if user not found
+        return 123L // Placeholder
+    }
+
     @Guard("execute", "program")
     @PostMapping("/batch")
     suspend fun submitBatchExecutionRequest(
@@ -60,26 +72,42 @@ class ExecuteController(
         }
 
         try {
+            val currentUserId = getCurrentUserId() // Get current user ID
+            val finalSessionId =
+                requests.firstOrNull()?.sessionId ?: UUID.randomUUID().toString()
+
+            // TODO: Add validation here: if requests.firstOrNull()?.sessionId is not null,
+            // ensure all other items in 'requests' have the SAME sessionId.
+            // If they differ, it's a bad request. For now, we trust the first or generate new.
+
             val results: Map<String, Result<String>> =
-                jobSubmitService.submitBatchExecution(requests)
-            val responseData =
-                results.mapValues { (_, result) ->
-                    if (result.isSuccess)
+                jobSubmitService.submitBatchExecution(requests, finalSessionId, currentUserId)
+
+            val responseDataPayload = mutableMapOf<String, Any>("sessionId" to finalSessionId)
+            results.forEach { (clientReqId, result) ->
+                responseDataPayload[clientReqId] =
+                    if (result.isSuccess) {
                         mapOf("status" to "SUBMITTED", "jobId" to result.getOrNull())
-                    else
+                    } else {
                         mapOf(
                             "status" to "ERROR",
                             "message" to
                                 (result.exceptionOrNull()?.message ?: "Unknown submission error"),
                         )
-                }
-            logger.info("Batch execution submission processed. Results: {}", responseData)
+                    }
+            }
+
+            logger.info(
+                "Batch execution submission processed. SessionId: {}, Results: {}",
+                finalSessionId,
+                responseDataPayload,
+            )
             return ResponseEntity.status(HttpStatus.ACCEPTED)
                 .body(
                     ApiResponse.Success(
                         code = 202,
                         message = "Batch execution jobs submitted.",
-                        data = responseData,
+                        data = responseDataPayload, // This map now contains sessionId
                     )
                 )
         } catch (e: Exception) {
@@ -115,6 +143,10 @@ class ExecuteController(
         }
 
         val emitter = SseEmitter(sseTimeout)
+        val currentUserId = getCurrentUserId() // Get current user ID
+        val finalSessionId = requests.firstOrNull()?.sessionId ?: UUID.randomUUID().toString()
+
+        // TODO: Add validation for session ID consistency in batch (similar to non-SSE endpoint)
 
         controllerScope.launch {
             var collectingJob: Job? = null
@@ -122,8 +154,27 @@ class ExecuteController(
             val failedSubmissions = mutableMapOf<String, String>() // clientReqId -> Error Message
 
             try {
+                // Send SESSION_INIT event
+                try {
+                    emitter.send(
+                        SseEmitter.event()
+                            .name("SESSION_INIT")
+                            .id(UUID.randomUUID().toString())
+                            .data(mapOf("sessionId" to finalSessionId), MediaType.APPLICATION_JSON)
+                    )
+                    logger.info("Sent SESSION_INIT event with sessionId: {}", finalSessionId)
+                } catch (e: Exception) {
+                    logger.warn(
+                        "Failed to send SESSION_INIT event for session {}: {}",
+                        finalSessionId,
+                        e.message,
+                    )
+                    // Depending on requirements, might want to complete emitter with error here
+                }
+
                 // 1. Submit Batch (this is suspend)
-                val submissionResults = jobSubmitService.submitBatchExecution(requests)
+                val submissionResults =
+                    jobSubmitService.submitBatchExecution(requests, finalSessionId, currentUserId)
 
                 // 2. Process submission results and prepare flows
                 val flowsToMerge = mutableListOf<SharedFlow<JobSseEvent>>()
@@ -205,12 +256,49 @@ class ExecuteController(
                         try {
                             mergedFlow.collect { event ->
                                 try {
-                                    val sseEvent =
-                                        SseEmitter.event()
-                                            .id(UUID.randomUUID().toString())
-                                            .name(event.eventType)
-                                            .data(event, MediaType.APPLICATION_JSON)
-                                    emitter.send(sseEvent)
+                                    // currentUserId and finalSessionId are from the outer scope
+                                    val originalEventData = event.data as? Map<*, *> ?: emptyMap<Any, Any>()
+                                    val clientEventData = originalEventData.toMutableMap()
+
+                                    val eventAiUserId = clientEventData["aiUserId"] as? Long
+                                    val eventSessionId = clientEventData["sessionId"] as? String
+
+                                    if (eventAiUserId == currentUserId && eventSessionId == finalSessionId) {
+                                        // This event is for the current user and current session, keep newMemoryData
+                                        logger.debug(
+                                            "Memory data for job {} (user {}, session {}) will be sent to current SSE user {} (SSE session: {})",
+                                            event.jobId,
+                                            eventAiUserId,
+                                            eventSessionId,
+                                            currentUserId,
+                                            finalSessionId,
+                                        )
+                                    } else {
+                                        // Not for the current user/session, or types don't match, remove memory data
+                                        clientEventData.remove("newMemoryData")
+                                        logger.debug(
+                                            "Memory data for job {} (user {}, session {}) will NOT be sent to current SSE user {} (SSE session: {}). Reason: User/Session mismatch.",
+                                            event.jobId,
+                                            eventAiUserId,
+                                            eventSessionId,
+                                            currentUserId,
+                                            finalSessionId,
+                                        )
+                                    }
+
+                                    val sseEventBuilder = SseEmitter.event()
+                                        .id(UUID.randomUUID().toString()) // Consider using event.id if available and unique
+                                        .name(event.eventType)
+                                        // Send the potentially modified clientEventData
+                                        // If JobSseEvent structure is { jobId, eventType, status, message, data: { actual_payload } }
+                                        // then we should reconstruct the top-level JobSseEvent for clarity or send clientEventData directly
+                                        // Assuming the listener wants the "data" part of JobSseEvent directly:
+                                        .data(clientEventData, MediaType.APPLICATION_JSON)
+                                        // If the listener expects the full JobSseEvent structure, but with modified data:
+                                        // .data(event.copy(data = clientEventData), MediaType.APPLICATION_JSON)
+                                        // For now, sending clientEventData directly as per prompt's implication.
+
+                                    emitter.send(sseEventBuilder)
                                     logger.trace(
                                         "Sent batch SSE event: {} for job {}",
                                         event.eventType,

@@ -11,8 +11,10 @@ import org.rucca.snake.worker.infra.amqp.ResultNotifier
 import org.rucca.snake.worker.infra.storage.MinioService
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.stereotype.Service
 import java.io.IOException
+import java.time.Duration
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -28,6 +30,9 @@ class ExecuteService(
     private val resultNotifier: ResultNotifier,
     private val applicationConfig: ApplicationConfig,
     private val minioService: MinioService,
+    private val redisTemplate: StringRedisTemplate, // Added RedisTemplate
+    @Value("\${memory.ttl.minutes}") private val memoryTtlMinutes: Long, // Added memory TTL
+    @Value("\${memory.max.size.kb}") private val memoryMaxSizeKb: Int, // Added memory max size
 ) {
     private val logger = LoggerFactory.getLogger(ExecuteService::class.java)
 
@@ -56,25 +61,77 @@ class ExecuteService(
      * @param jobId The unique job ID.
      */
     suspend fun processExecutionRequest(request: ExecutionRequest, jobId: String) {
-        val userId = request.userId
+        // Retrieve new fields from request
+        val sessionId = request.sessionId
+        val tickNumber = request.tickNumber
+        // val requestingUserId = request.currentUserId // Available if needed
+        val aiOwnerUserId = request.userId // Use this for memory keys and job ownership
+
         val userDataDir =
-            Paths.get(applicationConfig.dataDirectory, userId.toString()) // Base dir for user data
+            Paths.get(
+                applicationConfig.dataDirectory,
+                aiOwnerUserId.toString()
+            ) // Base dir for user data
         val executionDir =
             userDataDir.resolve("execute").resolve(jobId) // Unique dir for this execution run
         val inputFile = executionDir.resolve("input.txt")
         val logFile = executionDir.resolve("nsjail.log")
         val programFileName = "program"
         val programPathInExecDir = userDataDir.resolve(programFileName)
-        val minioObjectKey = "programs/$userId/$programFileName" // Key in MinIO
+        val minioObjectKey = "programs/$aiOwnerUserId/$programFileName" // Key in MinIO
 
         var currentStatus = JobStatus.RECEIVED
-        var programOutput: String? = null
+        // This will store the 'action' part of the AI output
+        var action: String = ""
+        var newMemoryData: String? = null // Raw from AI, Base64 encoded
+        var memoryDataForRedis: String? = null // Validated memory data for Redis
+
         var cpuTimeSeconds: Double? = null
         var memoryKb: Long? = null
         var exitCode: Int? = null
         var sandboxLogContent: String? = null // Store log content if needed for debugging or result
         var errorDetails: String? = null
         val startTime = Instant.now()
+
+        // Initialize previousMemoryData
+        var previousMemoryData = "" // Default to empty string
+        if (tickNumber > 0) { // Assuming tick numbers start from 0 or 1 for game ticks
+            val previousTickNumber = tickNumber - 1
+            val redisKey = "session:${sessionId}:memory:${aiOwnerUserId}:${previousTickNumber}"
+            try {
+                previousMemoryData = redisTemplate.opsForValue().get(redisKey) ?: ""
+                logger.info(
+                    "Retrieved previous memory for job {} from Redis key {}",
+                    jobId,
+                    redisKey
+                )
+            } catch (e: Exception) {
+                logger.error(
+                    "Redis error retrieving previous memory for job {}: {}. Key: {}",
+                    jobId,
+                    e.message,
+                    redisKey,
+                    e
+                )
+                // Fail the job as per requirements
+                updateJobStatus(
+                    jobId,
+                    JobStatus.ERROR,
+                    errorDetails = "Failed to read previous memory from Redis: ${e.message}",
+                    endTime = Instant.now()
+                )
+                resultNotifier.notifyExecutionResult(
+                    UUID.fromString(jobId),
+                    aiOwnerUserId,
+                    JobStatus.ERROR,
+                    null, // newMemoryData
+                    sessionId,
+                    tickNumber
+                    // errorDetails = "Failed to read previous memory from Redis: ${e.message}" // DTO needs update for this
+                )
+                throw RuntimeException("Failed to read previous memory from Redis for job $jobId", e)
+            }
+        }
 
         try {
             // 1. Update DB Status to RUNNING
@@ -97,9 +154,13 @@ class ExecuteService(
 
             // 3. Get Program Path (from cache or download from MinIO)
             // This function handles cache checking and download internally
-            val programPathInCache = cacheManager.getProgramPath(userId, minioObjectKey)
+            val programPathInCache = cacheManager.getProgramPath(aiOwnerUserId, minioObjectKey)
             if (programPathInCache == null || !Files.exists(programPathInCache)) {
-                logger.error("Failed to obtain program binary for user {} (job {})", userId, jobId)
+                logger.error(
+                    "Failed to obtain program binary for user {} (job {})",
+                    aiOwnerUserId,
+                    jobId
+                )
                 throw RuntimeException("Could not get program binary") // Critical failure
             }
             // We need the program inside the chroot dir for nsjail.
@@ -136,7 +197,9 @@ class ExecuteService(
             // 4. Prepare Input File
             withContext(Dispatchers.IO) {
                 try {
-                    Files.writeString(inputFile, request.inputData)
+                    val aiInputContent = """$previousMemoryData
+${request.inputData}"""
+                    Files.writeString(inputFile, aiInputContent)
                     logger.info("Prepared input file for job {} at {}", jobId, inputFile)
                 } catch (e: IOException) {
                     logger.error("Failed to write input file for job {}: {}", jobId, e.message)
@@ -150,7 +213,7 @@ class ExecuteService(
                     logger.info("Acquired nsjail permit for job {}", jobId)
                     val res =
                         runNsjail(
-                            userId = userId,
+                            userId = aiOwnerUserId, // Pass aiOwnerUserId
                             jobId = jobId, // Pass jobId for logging context if needed in runNsjail
                             userDataDir = userDataDir, // Chroot target
                             logFilePath = logFile,
@@ -164,8 +227,71 @@ class ExecuteService(
 
             // 6. Process Nsjail Result
             exitCode = nsjailResult.exitCode
-            programOutput = nsjailResult.output
+            // programOutput is now split into action and newMemoryData
+            // programOutput = nsjailResult.output // Old way
             sandboxLogContent = nsjailResult.logContent // Store for potential use/debugging
+
+            if (nsjailResult.output.isNotBlank()) {
+                val lines = nsjailResult.output.lines()
+                action = lines.firstOrNull()?.trim() ?: ""
+                if (lines.size > 1) {
+                    newMemoryData = lines.drop(1).joinToString(separator = "\n").trim()
+                    if (newMemoryData.isEmpty()) newMemoryData = null
+                }
+            }
+            logger.info(
+                "Job {}: Parsed Action='{}', NewMemoryData (raw from AI)='{}'",
+                jobId,
+                action,
+                newMemoryData?.take(100)
+            )
+
+            // Memory Size Limit Check (before storing to Redis)
+            memoryDataForRedis = newMemoryData // Assume it's valid initially
+            if (newMemoryData != null) {
+                val memorySizeBytes =
+                    newMemoryData.toByteArray().size // Size of the Base64 string itself in bytes
+                if (memorySizeBytes > memoryMaxSizeKb * 1024) {
+                    logger.warn(
+                        "Job {}: New memory data ({} bytes) exceeds limit of {} KB. Discarding memory.",
+                        jobId,
+                        memorySizeBytes,
+                        memoryMaxSizeKb
+                    )
+                    currentStatus =
+                        JobStatus.ERROR // Or a custom status like JobStatus.MEMORY_LIMIT_USER
+                    errorDetails = (errorDetails ?: "") + " Produced memory data exceeded size limit."
+                    memoryDataForRedis = null // Do not store oversized memory
+                }
+            }
+
+            // Store New Memory to Redis (if valid and job was successful so far)
+            // We check currentStatus before nsjail result processing, so if it's already ERROR (e.g. from mem size check), don't store
+            if (memoryDataForRedis != null && currentStatus != JobStatus.ERROR && nsjailResult.exitCode == 0) {
+                val redisKey = "session:${sessionId}:memory:${aiOwnerUserId}:${tickNumber}"
+                try {
+                    redisTemplate.opsForValue().set(redisKey, memoryDataForRedis!!, Duration.ofMinutes(memoryTtlMinutes))
+                    logger.info(
+                        "Stored new memory for job {} to Redis key {} with TTL {} mins",
+                        jobId,
+                        redisKey,
+                        memoryTtlMinutes
+                    )
+                } catch (e: Exception) {
+                    logger.error(
+                        "Redis error storing new memory for job {}: {}. Key: {}",
+                        jobId,
+                        e.message,
+                        redisKey,
+                        e
+                    )
+                    // Fail the job
+                    currentStatus = JobStatus.ERROR // Update status before final updateJobStatus call
+                    errorDetails = (errorDetails ?: "") + " Failed to store new memory to Redis: ${e.message}"
+                    // We won't throw here to allow finally block to run, but status is ERROR.
+                    // The existing resultNotifier in finally will pick up the ERROR status.
+                }
+            }
 
             // Output the sandbox log for debugging
             logger.debug(
@@ -244,7 +370,7 @@ class ExecuteService(
                 jobId = jobId,
                 status = currentStatus,
                 endTime = Instant.now(),
-                programOutput = programOutput, // Consider truncating if very large
+                programOutput = action, // <<< MODIFIED HERE
                 cpuTimeSeconds = cpuTimeSeconds,
                 memoryKb = memoryKb,
                 exitCode = exitCode,
@@ -255,8 +381,13 @@ class ExecuteService(
             // Notify result
             resultNotifier.notifyExecutionResult(
                 jobId = UUID.fromString(jobId),
-                userId = userId,
+                userId = aiOwnerUserId, // Use aiOwnerUserId
                 status = currentStatus,
+                action = action, // <<< ADDED HERE
+                newMemoryData = if (currentStatus == JobStatus.SUCCESS) memoryDataForRedis else null,
+                sessionId = sessionId,
+                tickNumber = tickNumber
+                // errorDetails = errorDetails // DTO needs update for this
             )
 
             // 8. Cleanup execution-specific directory (input, log)

@@ -34,12 +34,24 @@ class ResultNotifier(
         sendNotification(notification, AmqpConstants.MESSAGE_TYPE_COMPILE_RESULT, jobId.toString())
     }
 
-    suspend fun notifyExecutionResult(jobId: UUID, userId: Long, status: JobStatus) {
+    suspend fun notifyExecutionResult(
+        jobId: UUID,
+        userId: Long,
+        status: JobStatus,
+        action: String?,
+        newMemoryData: String?,
+        sessionId: String,
+        tickNumber: Int
+    ) {
         val notification = ExecutionResultNotification(
             jobId = jobId.toString(),
             userId = userId,
-            status = status, // Could include more data if needed by listener
-            timestamp = Instant.now()
+            status = status,
+            timestamp = Instant.now(),
+            newMemoryData = newMemoryData,
+            sessionId = sessionId,
+            tickNumber = tickNumber,
+            action = action // New field
         )
         sendNotification(notification, AmqpConstants.MESSAGE_TYPE_EXECUTE_RESULT, jobId.toString())
     }

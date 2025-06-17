@@ -16,6 +16,12 @@ spring:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
       ddl-auto: validate
+  data:
+    redis:
+      host: localhost # Or your Redis host
+      port: 6379 # Or your Redis port
+      # password: your-password # Uncomment and set if your Redis has a password
+      # timeout: 60000 # Connection timeout
   flyway:
     enabled: true
     schemas: ${DB_SCHEMA:public}
