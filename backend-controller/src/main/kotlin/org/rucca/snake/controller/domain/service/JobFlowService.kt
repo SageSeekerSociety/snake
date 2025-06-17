@@ -6,7 +6,6 @@ import kotlin.time.Duration.Companion.minutes
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.*
-import org.rucca.snake.controller.domain.model.JobResultDto
 import org.rucca.snake.controller.domain.model.JobSseEvent
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
@@ -66,9 +65,18 @@ class JobFlowService(
     fun getJobFlowsBySessionId(
         sessionId: UUID,
         requestingUserId: Long,
-    ): List<SharedFlow<JobSseEvent>> {
-        return jobQueryService.getJobIdsBySessionId(sessionId, requestingUserId).map { jobId ->
-            getJobFlow(jobId)
+        fromTick: Int = 0,
+    ): List<Flow<JobSseEvent>> {
+        return jobQueryService.getJobIdsBySessionId(sessionId, requestingUserId).distinct().map {
+            jobId ->
+            getJobFlow(jobId).filter { event ->
+                val eventData = event.data as? Map<*, *>
+                val eventTick = eventData?.get("tickNumber") as? Number
+
+                // If eventTick is null, allow all events (e.g., global errors)
+                // Otherwise, filter by tickNumber
+                eventTick == null || eventTick.toLong() >= fromTick
+            }
         }
     }
 
@@ -97,24 +105,6 @@ class JobFlowService(
             // Option: Could fetch final result from DB and create a short-lived flow? Or just
             // ignore.
         }
-    }
-
-    /**
-     * Publishes the final result for a job and potentially marks the flow for cleanup. Can be
-     * called by ResultListener or SseController when job completion is confirmed via DB.
-     */
-    suspend fun publishFinalResult(jobId: UUID, resultDto: JobResultDto) {
-        val event =
-            JobSseEvent(
-                jobId = jobId.toString(),
-                eventType = "FINAL_RESULT",
-                status = resultDto.status,
-                data = resultDto, // Send the full final result DTO
-            )
-        publishEvent(jobId, event)
-        // Consider removing the flow shortly after publishing the final result
-        // Or rely on the inactivity timeout
-        // removeFlow(jobId, delayMillis = 10000) // Remove after 10 seconds
     }
 
     /** Publishes an error event. */

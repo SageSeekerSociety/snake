@@ -132,7 +132,10 @@ class ExecuteController(
         "/stream/{sessionId}",
         produces = [MediaType.TEXT_EVENT_STREAM_VALUE, MediaType.APPLICATION_JSON_VALUE],
     )
-    fun streamBatchExecutionEvents(@PathVariable sessionId: String): SseEmitter {
+    fun streamBatchExecutionEvents(
+        @PathVariable sessionId: String,
+        @RequestParam(required = false, defaultValue = "0") fromTick: Int,
+    ): SseEmitter {
         logger.info("SSE stream connection requested for session ID: {}", sessionId)
         val emitter = SseEmitter(sseTimeout)
         var collectingJob: Job? = null
@@ -140,6 +143,14 @@ class ExecuteController(
         emitter.onCompletion { collectingJob?.cancel("Emitter completed") }
         emitter.onTimeout { collectingJob?.cancel("Emitter timed out") }
         emitter.onError { err -> collectingJob?.cancel("Emitter error: ${err?.message}") }
+
+        if (fromTick < 0) {
+            logger.warn("Invalid 'fromTick' value: {}. Must be non-negative.", fromTick)
+            emitter.completeWithError(
+                IllegalArgumentException("Invalid 'fromTick' value: $fromTick")
+            )
+            return emitter
+        }
 
         val currentUserId = getCurrentUserId()
 
@@ -154,7 +165,7 @@ class ExecuteController(
         controllerScope.launch {
             try {
                 val flowsToMerge =
-                    jobFlowService.getJobFlowsBySessionId(sessionIdAsUUID, currentUserId)
+                    jobFlowService.getJobFlowsBySessionId(sessionIdAsUUID, currentUserId, fromTick)
 
                 if (flowsToMerge.isEmpty()) {
                     logger.warn(
