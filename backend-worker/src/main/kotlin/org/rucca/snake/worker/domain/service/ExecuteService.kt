@@ -200,8 +200,8 @@ class ExecuteService(
             withContext(Dispatchers.IO) {
                 try {
                     val aiInputContent =
-                        """$previousMemoryData
-${request.inputData}"""
+                        """${request.inputData}
+$previousMemoryData"""
                     Files.writeString(inputFile, aiInputContent)
                     logger.info("Prepared input file for job {} at {}", jobId, inputFile)
                 } catch (e: IOException) {
@@ -500,7 +500,8 @@ ${request.inputData}"""
                 // Don't merge stderr to stdout, nsjail logs errors to stderr or log file
                 // processBuilder.redirectErrorStream(true)
 
-                val process = processBuilder.start()
+                val process = processBuilder
+                    .start()
 
                 // Asynchronously capture stdout
                 val outputGobbler =
