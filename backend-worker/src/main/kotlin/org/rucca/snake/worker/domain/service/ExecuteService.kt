@@ -1,5 +1,14 @@
 package org.rucca.snake.worker.domain.service
 
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.time.Duration
+import java.time.Instant
+import java.util.*
+import java.util.concurrent.TimeUnit
+import java.util.regex.Pattern
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -14,15 +23,6 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.stereotype.Service
-import java.io.IOException
-import java.nio.file.Files
-import java.nio.file.Path
-import java.nio.file.Paths
-import java.time.Duration
-import java.time.Instant
-import java.util.*
-import java.util.concurrent.TimeUnit
-import java.util.regex.Pattern
 
 @Service
 class ExecuteService(
@@ -67,7 +67,7 @@ class ExecuteService(
         val userDataDir =
             Paths.get(
                 applicationConfig.dataDirectory,
-                aiOwnerUserId.toString()
+                aiOwnerUserId.toString(),
             ) // Base dir for user data
         val executionDir =
             userDataDir.resolve("execute").resolve(jobId) // Unique dir for this execution run
@@ -100,7 +100,7 @@ class ExecuteService(
                 logger.info(
                     "Retrieved previous memory for job {} from Redis key {}",
                     jobId,
-                    redisKey
+                    redisKey,
                 )
             } catch (e: Exception) {
                 logger.error(
@@ -108,14 +108,14 @@ class ExecuteService(
                     jobId,
                     e.message,
                     redisKey,
-                    e
+                    e,
                 )
                 // Fail the job as per requirements
                 updateJobStatus(
                     jobId,
                     JobStatus.ERROR,
                     errorDetails = "Failed to read previous memory from Redis: ${e.message}",
-                    endTime = Instant.now()
+                    endTime = Instant.now(),
                 )
                 resultNotifier.notifyExecutionResult(
                     UUID.fromString(jobId),
@@ -124,10 +124,14 @@ class ExecuteService(
                     null,
                     null, // newMemoryData
                     sessionId,
-                    tickNumber
-                    // errorDetails = "Failed to read previous memory from Redis: ${e.message}" // DTO needs update for this
+                    tickNumber,
+                    // errorDetails = "Failed to read previous memory from Redis: ${e.message}" //
+                    // DTO needs update for this
                 )
-                throw RuntimeException("Failed to read previous memory from Redis for job $jobId", e)
+                throw RuntimeException(
+                    "Failed to read previous memory from Redis for job $jobId",
+                    e,
+                )
             }
         }
 
@@ -157,7 +161,7 @@ class ExecuteService(
                 logger.error(
                     "Failed to obtain program binary for user {} (job {})",
                     aiOwnerUserId,
-                    jobId
+                    jobId,
                 )
                 throw RuntimeException("Could not get program binary") // Critical failure
             }
@@ -195,7 +199,8 @@ class ExecuteService(
             // 4. Prepare Input File
             withContext(Dispatchers.IO) {
                 try {
-                    val aiInputContent = """$previousMemoryData
+                    val aiInputContent =
+                        """$previousMemoryData
 ${request.inputData}"""
                     Files.writeString(inputFile, aiInputContent)
                     logger.info("Prepared input file for job {} at {}", jobId, inputFile)
@@ -241,7 +246,7 @@ ${request.inputData}"""
                 "Job {}: Parsed Action='{}', NewMemoryData (raw from AI)='{}'",
                 jobId,
                 action,
-                newMemoryData?.take(100)
+                newMemoryData?.take(100),
             )
 
             // Memory Size Limit Check (before storing to Redis)
@@ -255,36 +260,45 @@ ${request.inputData}"""
                             "Job {}: New memory data (decoded {} bytes) exceeds limit of {} KB. Discarding memory.",
                             jobId,
                             memorySizeBytes,
-                            memoryMaxSizeKb
+                            memoryMaxSizeKb,
                         )
                         currentStatus =
                             JobStatus.ERROR // Or a custom status like JobStatus.MEMORY_LIMIT_USER
-                        errorDetails = (errorDetails ?: "") + " Produced memory data exceeded size limit."
+                        errorDetails =
+                            (errorDetails ?: "") + " Produced memory data exceeded size limit."
                         memoryDataForRedis = null // Do not store oversized memory
                     }
                 } catch (e: IllegalArgumentException) {
                     logger.warn(
                         "Job {}: New memory data is not valid Base64. Discarding memory. Error: {}",
                         jobId,
-                        e.message
+                        e.message,
                     )
                     currentStatus = JobStatus.ERROR
-                    errorDetails = (errorDetails ?: "") + " Produced memory data is not valid Base64."
+                    errorDetails =
+                        (errorDetails ?: "") + " Produced memory data is not valid Base64."
                     memoryDataForRedis = null
                 }
             }
 
             // Store New Memory to Redis (if valid and job was successful so far)
-            // We check currentStatus before nsjail result processing, so if it's already ERROR (e.g. from mem size check), don't store
-            if (memoryDataForRedis != null && currentStatus != JobStatus.ERROR && nsjailResult.exitCode == 0) {
+            // We check currentStatus before nsjail result processing, so if it's already ERROR
+            // (e.g. from mem size check), don't store
+            if (
+                memoryDataForRedis != null &&
+                    currentStatus != JobStatus.ERROR &&
+                    nsjailResult.exitCode == 0
+            ) {
                 val redisKey = "session:${sessionId}:memory:${aiOwnerUserId}:${tickNumber}"
                 try {
-                    redisTemplate.opsForValue().set(redisKey, memoryDataForRedis, Duration.ofMinutes(memoryTtlMinutes))
+                    redisTemplate
+                        .opsForValue()
+                        .set(redisKey, memoryDataForRedis, Duration.ofMinutes(memoryTtlMinutes))
                     logger.info(
                         "Stored new memory for job {} to Redis key {} with TTL {} mins",
                         jobId,
                         redisKey,
-                        memoryTtlMinutes
+                        memoryTtlMinutes,
                     )
                 } catch (e: Exception) {
                     logger.error(
@@ -292,11 +306,13 @@ ${request.inputData}"""
                         jobId,
                         e.message,
                         redisKey,
-                        e
+                        e,
                     )
                     // Fail the job
-                    currentStatus = JobStatus.ERROR // Update status before final updateJobStatus call
-                    errorDetails = (errorDetails ?: "") + " Failed to store new memory to Redis: ${e.message}"
+                    currentStatus =
+                        JobStatus.ERROR // Update status before final updateJobStatus call
+                    errorDetails =
+                        (errorDetails ?: "") + " Failed to store new memory to Redis: ${e.message}"
                     // We won't throw here to allow finally block to run, but status is ERROR.
                     // The existing resultNotifier in finally will pick up the ERROR status.
                 }
@@ -357,13 +373,13 @@ ${request.inputData}"""
             var finalLogRef: String? = null
             if (Files.exists(logFile)) {
                 try {
-                    minioService.uploadFile(
-                        objectKey = logFileKey,
-                        filePath = logFile,
-                        contentType = "text/plain",
-                    )?.also {
-                        finalLogRef = logFileKey
-                    }
+                    minioService
+                        .uploadFile(
+                            objectKey = logFileKey,
+                            filePath = logFile,
+                            contentType = "text/plain",
+                        )
+                        ?.also { finalLogRef = logFileKey }
                     logger.info("Uploaded nsjail log file for job {} to MinIO", jobId)
                 } catch (e: Exception) {
                     logger.error(
@@ -393,9 +409,10 @@ ${request.inputData}"""
                 userId = aiOwnerUserId, // Use aiOwnerUserId
                 status = currentStatus,
                 action = action, // <<< ADDED HERE
-                newMemoryData = if (currentStatus == JobStatus.SUCCESS) memoryDataForRedis else null,
+                newMemoryData =
+                    if (currentStatus == JobStatus.SUCCESS) memoryDataForRedis else null,
                 sessionId = sessionId,
-                tickNumber = tickNumber
+                tickNumber = tickNumber,
                 // errorDetails = errorDetails // DTO needs update for this
             )
 
@@ -509,8 +526,7 @@ ${request.inputData}"""
                     )
                     try {
                         process.destroyForcibly()
-                    } catch (_: Exception) {
-                    }
+                    } catch (_: Exception) {}
                     exitCode = -9 // Assign custom code for wall TLE
                     processOutput =
                         outputGobbler.await().take(10 * 1024) // Get partial output (limit size)
@@ -620,7 +636,8 @@ ${request.inputData}"""
         if (logContent == null) return false
         // Look for the characteristic log message indicating wall clock timeout
         // The pattern is: "pid=XXX run time >= time limit (XXX >= XXX) (XXX). Killing it"
-        val wallClockTimeoutRegex = Regex("pid=\\d+ run time >= time limit \\(\\d+ >= \\d+\\).*?Killing it")
+        val wallClockTimeoutRegex =
+            Regex("pid=\\d+ run time >= time limit \\(\\d+ >= \\d+\\).*?Killing it")
         return wallClockTimeoutRegex.find(logContent) != null
     }
 
@@ -652,9 +669,11 @@ ${request.inputData}"""
             // Check for signals indicating resource limits (may need testing)
             // SIGXCPU (CPU time limit exceeded by rlimit_cpu) - often exit code 152 (128 + 24) or
             // similar
-            152, (128 + SIGXCPU) -> JobStatus.TLE
+            152,
+            (128 + SIGXCPU) -> JobStatus.TLE
             // SIGKILL (Often sent for OOM by cgroup or external killer) - exit code 137 (128 + 9)
-            137, (128 + SIGKILL) -> {
+            137,
+            (128 + SIGKILL) -> {
                 // Step 1: Check for Wall Clock timeout in logs
                 if (isWallClockTimeout(result.logContent)) {
                     logger.info("Detected Wall Clock TLE from log content for exit code 137")
@@ -672,10 +691,11 @@ ${request.inputData}"""
                 return JobStatus.TLE
             }
             // SIGSEGV (Segmentation fault) - exit code 139 (128 + 11)
-            139, (128 + SIGSEGV) -> JobStatus.RE
+            139,
+            (128 + SIGSEGV) -> JobStatus.RE
             // SIGXFSZ (File size limit exceeded) - exit code 153 (128 + 25) or similar
-            153, (128 + SIGXFSZ) ->
-                JobStatus.OLE // Treat as Output Limit Exceeded
+            153,
+            (128 + SIGXFSZ) -> JobStatus.OLE // Treat as Output Limit Exceeded
             // Add other relevant signals (SIGABRT, SIGBUS etc.)
 
             // Normal exit
@@ -699,19 +719,21 @@ ${request.inputData}"""
         return when (status) {
             JobStatus.TLE -> {
                 // Provide more specific TLE information based on the exit code and log content
-                val tleType = when {
-                    result.timedOut -> "Wall Clock Time Limit Exceeded (Process Timeout)"
-                    result.exitCode == 152 || result.exitCode == (128 + SIGXCPU) -> "CPU Time Limit Exceeded (SIGXCPU)"
-                    result.exitCode == 137 || result.exitCode == (128 + SIGKILL) -> {
-                        if (isWallClockTimeout(result.logContent)) {
-                            "Wall Clock Time Limit Exceeded"
-                        } else {
-                            "CPU Time Limit Exceeded"
+                val tleType =
+                    when {
+                        result.timedOut -> "Wall Clock Time Limit Exceeded (Process Timeout)"
+                        result.exitCode == 152 || result.exitCode == (128 + SIGXCPU) ->
+                            "CPU Time Limit Exceeded (SIGXCPU)"
+                        result.exitCode == 137 || result.exitCode == (128 + SIGKILL) -> {
+                            if (isWallClockTimeout(result.logContent)) {
+                                "Wall Clock Time Limit Exceeded"
+                            } else {
+                                "CPU Time Limit Exceeded"
+                            }
                         }
-                    }
 
-                    else -> "Time Limit Exceeded"
-                }
+                        else -> "Time Limit Exceeded"
+                    }
                 "$tleType. $exitInfo, $timeInfo, $memInfo"
             }
 
@@ -719,8 +741,7 @@ ${request.inputData}"""
             JobStatus.RE -> "Runtime Error. $exitInfo, $timeInfo, $memInfo"
             JobStatus.OLE ->
                 "Output/File Size Limit Exceeded. $exitInfo" // Time/Mem less relevant here
-            JobStatus.ERROR ->
-                "Worker Error. ${result.logContent}" // Show last part of log for
+            JobStatus.ERROR -> "Worker Error. ${result.logContent}" // Show last part of log for
             // worker errors
             else -> "Execution Failed. $exitInfo" // Generic failure
         }

@@ -8,8 +8,9 @@ object AmqpConstants {
     const val MESSAGE_TYPE_COMPILE = "CompilationRequest"
     const val MESSAGE_TYPE_EXECUTE = "ExecutionRequest"
 
-    const val MESSAGE_TYPE_COMPILE_RESULT = "CompilationResult";
-    const val MESSAGE_TYPE_EXECUTE_RESULT = "ExecutionResult";
+    const val MESSAGE_TYPE_COMPILE_RESULT = "CompilationResult"
+
+    const val MESSAGE_TYPE_EXECUTE_RESULT = "ExecutionResult"
 
     // Add other constants like queue names, exchange names if needed here,
     // although getting them from configuration (@Value) is often preferred.

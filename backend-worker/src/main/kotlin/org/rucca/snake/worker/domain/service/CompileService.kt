@@ -1,5 +1,12 @@
 package org.rucca.snake.worker.domain.service
 
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.time.Instant
+import java.util.*
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.*
 import org.rucca.snake.common.domain.exception.CompilationTimeoutException
 import org.rucca.snake.common.domain.model.CompilationRequest
@@ -11,13 +18,6 @@ import org.rucca.snake.worker.infra.storage.MinioService
 import org.rucca.snake.worker.utils.deleteDirectoryRecursively
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
-import java.io.IOException
-import java.nio.file.Files
-import java.nio.file.Path
-import java.nio.file.Paths
-import java.time.Instant
-import java.util.*
-import java.util.concurrent.TimeUnit
 
 @Service
 class CompileService(
@@ -61,34 +61,53 @@ class CompileService(
             updateJobStatus(jobId, currentStatus, startTime = startTime)
 
             // 2. Prepare compilation directory
-            val compileDir: Path = withContext(Dispatchers.IO) {
-                try {
-                    Files.createDirectories(userCompileDir)
-                    logger.info("Created compile directory for job {} at {}", jobId, userCompileDir)
-                    userCompileDir // Return the path
-                } catch (e: IOException) {
-                    logger.error("Failed to create compile directory for job {}: {}", jobId, e.message)
-                    throw RuntimeException("IO error during compilation preparation", e)
+            val compileDir: Path =
+                withContext(Dispatchers.IO) {
+                    try {
+                        Files.createDirectories(userCompileDir)
+                        logger.info(
+                            "Created compile directory for job {} at {}",
+                            jobId,
+                            userCompileDir,
+                        )
+                        userCompileDir // Return the path
+                    } catch (e: IOException) {
+                        logger.error(
+                            "Failed to create compile directory for job {}: {}",
+                            jobId,
+                            e.message,
+                        )
+                        throw RuntimeException("IO error during compilation preparation", e)
+                    }
                 }
-            }
 
             // 3. Download Source Code from MinIO
-            val downloadSuccess: Boolean = withContext(Dispatchers.IO) {
-                logger.info(
-                    "Downloading source code for job {} from MinIO key '{}' to '{}'",
-                    jobId,
-                    sourceCodeRef,
-                    sourceFilePath
-                )
-                minioService.downloadObject(sourceCodeRef, sourceFilePath)
-            }
+            val downloadSuccess: Boolean =
+                withContext(Dispatchers.IO) {
+                    logger.info(
+                        "Downloading source code for job {} from MinIO key '{}' to '{}'",
+                        jobId,
+                        sourceCodeRef,
+                        sourceFilePath,
+                    )
+                    minioService.downloadObject(sourceCodeRef, sourceFilePath)
+                }
 
             if (!downloadSuccess) {
-                logger.error("Failed to download source code from MinIO (key: {}) for job {}", sourceCodeRef, jobId)
+                logger.error(
+                    "Failed to download source code from MinIO (key: {}) for job {}",
+                    sourceCodeRef,
+                    jobId,
+                )
                 currentStatus = JobStatus.ERROR
                 errorDetails = "Failed to download source code from storage."
                 // No need to proceed further if source isn't available
-                updateJobStatus(jobId, currentStatus, endTime = Instant.now(), errorDetails = errorDetails)
+                updateJobStatus(
+                    jobId,
+                    currentStatus,
+                    endTime = Instant.now(),
+                    errorDetails = errorDetails,
+                )
                 cleanupCompileDir(compileDir, jobId) // Clean up directory
                 // Re-throw to trigger NACK
                 throw RuntimeException("Failed to download source code for job $jobId")
@@ -164,7 +183,7 @@ class CompileService(
                 UUID.fromString(jobId),
                 request.userId,
                 currentStatus,
-                programStorageRef
+                programStorageRef,
             )
 
             // 8. Cleanup local compile directory
@@ -302,7 +321,6 @@ class CompileService(
                 // Save the updated job entity. This is a blocking call.
                 compilationJobRepository.save(job)
                 logger.info("Updated job {} status to {}", jobId, status)
-
             } catch (e: Exception) {
                 logger.error("Failed to update database for job {}: {}", jobId, e.message, e)
                 // This is problematic. If DB update fails, the job state might be inconsistent.

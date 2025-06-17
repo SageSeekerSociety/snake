@@ -1,16 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <!-- 继承父 POM -->
     <parent>
         <groupId>org.rucca</groupId>
         <artifactId>snake</artifactId>
         <version>0.0.1-SNAPSHOT</version>
-        <relativePath>../pom.xml</relativePath> <!-- 指向父 POM 的相对路径 -->
+        <relativePath>../pom.xml</relativePath>
+        <!-- 指向父 POM 的相对路径 -->
     </parent>
 
-    <artifactId>snake.common</artifactId> <!-- 当前模块的 artifactId -->
+    <artifactId>snake.common</artifactId>
+    <!-- 当前模块的 artifactId -->
     <name>snake.common</name>
     <description>Common classes and interfaces for the snake game backend</description>
     <!-- packaging 默认为 jar，无需显式指定 -->
@@ -21,54 +22,60 @@
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-stdlib</artifactId>
         </dependency>
-         <dependency>
-             <groupId>org.jetbrains.kotlin</groupId>
-             <artifactId>kotlin-reflect</artifactId>
-         </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-reflect</artifactId>
+        </dependency>
 
         <!-- 如果共享实体类，需要 JPA API 和 Hibernate Utils (如果用了里面的类型) -->
         <dependency>
             <groupId>org.springframework.data</groupId>
-            <artifactId>spring-data-jpa</artifactId> <!-- 只需要 JPA API 和基础 Spring Data -->
+            <artifactId>spring-data-jpa</artifactId>
+            <!-- 只需要 JPA API 和基础 Spring Data -->
         </dependency>
         <dependency>
             <groupId>jakarta.persistence</groupId>
-            <artifactId>jakarta.persistence-api</artifactId> <!-- JPA 注解 -->
+            <artifactId>jakarta.persistence-api</artifactId>
+            <!-- JPA 注解 -->
         </dependency>
-         <dependency> <!-- 如果实体类用了 @JdbcTypeCode 等 Hibernate 特定注解 -->
-             <groupId>org.hibernate.orm</groupId>
-             <artifactId>hibernate-core</artifactId>
-         </dependency>
-        <dependency> <!-- 如果实体类用了 Hypersistence Utils 的类型 -->
-             <groupId>io.hypersistence</groupId>
-             <artifactId>hypersistence-utils-hibernate-63</artifactId>
+        <dependency>
+            <!-- 如果实体类用了 @JdbcTypeCode 等 Hibernate 特定注解 -->
+            <groupId>org.hibernate.orm</groupId>
+            <artifactId>hibernate-core</artifactId>
         </dependency>
-
+        <dependency>
+            <!-- 如果实体类用了 Hypersistence Utils 的类型 -->
+            <groupId>io.hypersistence</groupId>
+            <artifactId>hypersistence-utils-hibernate-63</artifactId>
+        </dependency>
 
         <!-- 如果共享 DTO 类，需要 Jackson Annotations -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-annotations</artifactId>
         </dependency>
-        <dependency> <!-- 如果 DTO 用了 Java Time -->
-             <groupId>com.fasterxml.jackson.datatype</groupId>
-             <artifactId>jackson-datatype-jsr310</artifactId>
+        <dependency>
+            <!-- 如果 DTO 用了 Java Time -->
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
         </dependency>
-         <dependency> <!-- 如果 DTO 用了 Jakarta Validation 注解 -->
-             <groupId>jakarta.validation</groupId>
-             <artifactId>jakarta.validation-api</artifactId>
-         </dependency>
-         <dependency> <!-- 如果 DTO 用了 Swagger 注解 -->
-             <groupId>io.swagger.core.v3</groupId>
-             <artifactId>swagger-annotations</artifactId>
-         </dependency>
-
+        <dependency>
+            <!-- 如果 DTO 用了 Jakarta Validation 注解 -->
+            <groupId>jakarta.validation</groupId>
+            <artifactId>jakarta.validation-api</artifactId>
+        </dependency>
+        <dependency>
+            <!-- 如果 DTO 用了 Swagger 注解 -->
+            <groupId>io.swagger.core.v3</groupId>
+            <artifactId>swagger-annotations</artifactId>
+        </dependency>
 
         <!-- 其他 common 模块需要的、非 Spring Boot Starter 的依赖 -->
-         <dependency> <!-- 如果常量或工具类需要日志 -->
-             <groupId>org.slf4j</groupId>
-             <artifactId>slf4j-api</artifactId>
-         </dependency>
+        <dependency>
+            <!-- 如果常量或工具类需要日志 -->
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
 
     </dependencies>
 
@@ -79,17 +86,19 @@
                 <groupId>org.jetbrains.kotlin</groupId>
                 <artifactId>kotlin-maven-plugin</artifactId>
                 <configuration>
-                     <compilerPlugins>
-                         <plugin>jpa</plugin> <!-- 启用 JPA 插件，因为有实体 -->
-                     </compilerPlugins>
+                    <compilerPlugins>
+                        <plugin>jpa</plugin>
+                        <!-- 启用 JPA 插件，因为有实体 -->
+                    </compilerPlugins>
                 </configuration>
                 <dependencies>
-                      <dependency> <!-- 启用 JPA 插件需要 noarg -->
-                         <groupId>org.jetbrains.kotlin</groupId>
-                         <artifactId>kotlin-maven-noarg</artifactId>
-                         <version>${kotlin.version}</version>
-                     </dependency>
-                 </dependencies>
+                    <dependency>
+                        <!-- 启用 JPA 插件需要 noarg -->
+                        <groupId>org.jetbrains.kotlin</groupId>
+                        <artifactId>kotlin-maven-noarg</artifactId>
+                        <version>${kotlin.version}</version>
+                    </dependency>
+                </dependencies>
             </plugin>
         </plugins>
     </build>

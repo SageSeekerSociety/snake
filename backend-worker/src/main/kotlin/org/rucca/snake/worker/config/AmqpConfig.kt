@@ -1,9 +1,13 @@
 package org.rucca.snake.worker.config
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import org.springframework.amqp.AmqpRejectAndDontRequeueException // Import this
 import org.springframework.amqp.core.*
+import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory
 import org.springframework.amqp.rabbit.connection.ConnectionFactory
 import org.springframework.amqp.rabbit.core.RabbitTemplate
+import org.springframework.amqp.rabbit.listener.RabbitListenerContainerFactory
+import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer
 import org.springframework.amqp.rabbit.support.DefaultMessagePropertiesConverter
 import org.springframework.amqp.rabbit.support.MessagePropertiesConverter
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter
@@ -13,14 +17,10 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.context.annotation.Primary
-import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory
-import org.springframework.amqp.rabbit.listener.RabbitListenerContainerFactory
-import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer
-import org.springframework.retry.interceptor.RetryInterceptorBuilder
 import org.springframework.retry.backoff.ExponentialBackOffPolicy
-import org.springframework.retry.policy.SimpleRetryPolicy
-import org.springframework.amqp.AmqpRejectAndDontRequeueException // Import this
 import org.springframework.retry.interceptor.MethodInvocationRecoverer // Import this
+import org.springframework.retry.interceptor.RetryInterceptorBuilder
+import org.springframework.retry.policy.SimpleRetryPolicy
 
 @Configuration
 class AmqpConfig {
@@ -55,7 +55,8 @@ class AmqpConfig {
 
     // --- Listener Configuration ---
     @Value("\${amqp.listener.prefetch:10}") private val prefetchCount: Int = 10
-    @Value("\${amqp.listener.retry.initial-interval:1000}") private val retryInitialInterval: Long = 1000L
+    @Value("\${amqp.listener.retry.initial-interval:1000}")
+    private val retryInitialInterval: Long = 1000L
     @Value("\${amqp.listener.retry.max-interval:10000}") private val retryMaxInterval: Long = 10000L
     @Value("\${amqp.listener.retry.multiplier:2.0}") private val retryMultiplier: Double = 2.0
     @Value("\${amqp.listener.retry.max-attempts:3}") private val retryMaxAttempts: Int = 3
@@ -168,22 +169,23 @@ class AmqpConfig {
     }
 
     /**
-     * Creates a Jackson2JsonMessageConverter Bean.
-     * Uses the primary ObjectMapper configured in the application (e.g., from JacksonConfig).
+     * Creates a Jackson2JsonMessageConverter Bean. Uses the primary ObjectMapper configured in the
+     * application (e.g., from JacksonConfig).
      *
      * @param objectMapper Spring's configured ObjectMapper (with Kotlin & JavaTime modules).
      * @return The configured message converter.
      */
     @Bean
     fun jsonMessageConverter(objectMapper: ObjectMapper): MessageConverter {
-        // Explicitly create the converter with the ObjectMapper that supports Kotlin data classes and Java Time
+        // Explicitly create the converter with the ObjectMapper that supports Kotlin data classes
+        // and Java Time
         return Jackson2JsonMessageConverter(objectMapper)
     }
 
     /**
-     * Configures the RabbitTemplate to use the JSON message converter.
-     * Spring Boot might auto-configure this if a MessageConverter bean is present,
-     * but explicitly setting it ensures correctness.
+     * Configures the RabbitTemplate to use the JSON message converter. Spring Boot might
+     * auto-configure this if a MessageConverter bean is present, but explicitly setting it ensures
+     * correctness.
      *
      * @param connectionFactory The RabbitMQ connection factory.
      * @param messageConverter The configured Jackson2JsonMessageConverter bean.
@@ -191,7 +193,10 @@ class AmqpConfig {
      */
     @Bean
     @Primary // Make this the default template if you have others
-    fun rabbitTemplate(connectionFactory: ConnectionFactory, messageConverter: MessageConverter): RabbitTemplate {
+    fun rabbitTemplate(
+        connectionFactory: ConnectionFactory,
+        messageConverter: MessageConverter,
+    ): RabbitTemplate {
         val template = RabbitTemplate(connectionFactory)
         template.messageConverter = messageConverter // Set the JSON converter
         // Add other template configurations if needed (e.g., reply timeout for RPC)
@@ -218,26 +223,29 @@ class AmqpConfig {
         factory.setAcknowledgeMode(AcknowledgeMode.MANUAL)
 
         // Define a MethodInvocationRecoverer that throws AmqpRejectAndDontRequeueException
-        val recoverer = MethodInvocationRecoverer<Unit> { args, cause ->
-            // args[0] is the Message for our listeners
-            // Optional: Log here if specific logging for recovery is needed
-            // val message = args.firstOrNull { it is Message } as? Message
-            // logger.warn("Message recovery after retries for message: ${message?.messageProperties?.correlationId}", cause)
-            throw AmqpRejectAndDontRequeueException("Failed after max retries.", cause)
-        }
+        val recoverer =
+            MethodInvocationRecoverer<Unit> { args, cause ->
+                // args[0] is the Message for our listeners
+                // Optional: Log here if specific logging for recovery is needed
+                // val message = args.firstOrNull { it is Message } as? Message
+                // logger.warn("Message recovery after retries for message:
+                // ${message?.messageProperties?.correlationId}", cause)
+                throw AmqpRejectAndDontRequeueException("Failed after max retries.", cause)
+            }
 
         // Configure retry mechanism
-        val retryInterceptor = RetryInterceptorBuilder.stateless()
-            .retryPolicy(SimpleRetryPolicy(retryMaxAttempts))
-            .backOffPolicy(
-                ExponentialBackOffPolicy().apply {
-                    initialInterval = retryInitialInterval
-                    maxInterval = retryMaxInterval
-                    multiplier = retryMultiplier
-                },
-            )
-            .recoverer(recoverer) // Use the custom MethodInvocationRecoverer
-            .build()
+        val retryInterceptor =
+            RetryInterceptorBuilder.stateless()
+                .retryPolicy(SimpleRetryPolicy(retryMaxAttempts))
+                .backOffPolicy(
+                    ExponentialBackOffPolicy().apply {
+                        initialInterval = retryInitialInterval
+                        maxInterval = retryMaxInterval
+                        multiplier = retryMultiplier
+                    }
+                )
+                .recoverer(recoverer) // Use the custom MethodInvocationRecoverer
+                .build()
 
         factory.setAdviceChain(retryInterceptor)
         // Ensure messages are not requeued by default if an exception escapes the advice chain

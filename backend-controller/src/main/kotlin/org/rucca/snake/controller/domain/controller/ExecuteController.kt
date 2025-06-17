@@ -143,17 +143,18 @@ class ExecuteController(
 
         val currentUserId = getCurrentUserId()
 
-        val sessionIdAsUUID = runCatching {
-            UUID.fromString(sessionId)
-        }.getOrElse {
-            logger.warn("Invalid UUID format for session ID from client: {}", sessionId)
-            emitter.completeWithError(it)
-            return emitter
-        }
+        val sessionIdAsUUID =
+            runCatching { UUID.fromString(sessionId) }
+                .getOrElse {
+                    logger.warn("Invalid UUID format for session ID from client: {}", sessionId)
+                    emitter.completeWithError(it)
+                    return emitter
+                }
 
         controllerScope.launch {
             try {
-                val flowsToMerge = jobFlowService.getJobFlowsBySessionId(sessionIdAsUUID, currentUserId)
+                val flowsToMerge =
+                    jobFlowService.getJobFlowsBySessionId(sessionIdAsUUID, currentUserId)
 
                 if (flowsToMerge.isEmpty()) {
                     logger.warn(

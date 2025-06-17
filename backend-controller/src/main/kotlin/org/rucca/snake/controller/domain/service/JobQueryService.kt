@@ -160,17 +160,11 @@ class JobQueryService(
         }
     }
 
-    fun isOwnerOfExecutionJob(
-        jobId: UUID,
-        userId: Long,
-    ): Boolean {
+    fun isOwnerOfExecutionJob(jobId: UUID, userId: Long): Boolean {
         return executionJobRepository.existsByJobIdAndUserId(jobId, userId)
     }
 
-    fun isOwnerOfCompilationJob(
-        jobId: UUID,
-        userId: Long,
-    ): Boolean {
+    fun isOwnerOfCompilationJob(jobId: UUID, userId: Long): Boolean {
         return compilationJobRepository.existsByJobIdAndUserId(jobId, userId)
     }
 }

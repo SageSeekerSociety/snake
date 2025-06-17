@@ -305,9 +305,11 @@ class JobSubmitService(
         val submitTime = Instant.now()
 
         // 1. Create Job Entity
-        val sessionUuid = runCatching { UUID.fromString(finalSessionId) }.getOrElse {
-            throw IllegalArgumentException("Invalid sessionId format: $finalSessionId", it)
-        }
+        val sessionUuid =
+            runCatching { UUID.fromString(finalSessionId) }
+                .getOrElse {
+                    throw IllegalArgumentException("Invalid sessionId format: $finalSessionId", it)
+                }
         val executionJob =
             ExecutionJob(
                 jobId = jobId,

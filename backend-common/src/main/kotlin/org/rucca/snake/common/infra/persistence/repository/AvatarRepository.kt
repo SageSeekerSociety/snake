@@ -33,9 +33,7 @@
 package org.rucca.snake.common.infra.persistence.repository
 
 import org.rucca.snake.common.infra.persistence.entity.Avatar
-import org.rucca.snake.common.infra.persistence.entity.UserProfile
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.stereotype.Repository
 
-@Repository
-interface AvatarRepository : JpaRepository<Avatar, Int>
+@Repository interface AvatarRepository : JpaRepository<Avatar, Int>

@@ -12,7 +12,9 @@ interface ExecutionJobRepository : JpaRepository<ExecutionJob, UUID> {
 
     fun findAllByJobIdIn(jobIds: Collection<UUID>): List<ExecutionJob>
 
-    @Query("SELECT ej.jobId FROM ExecutionJob ej WHERE ej.sessionId = :sessionId AND ej.userId = :userId")
+    @Query(
+        "SELECT ej.jobId FROM ExecutionJob ej WHERE ej.sessionId = :sessionId AND ej.userId = :userId"
+    )
     fun findJobIdsBySessionIdAndUserId(sessionId: UUID, userId: Long): List<UUID>
 
     fun existsByJobIdAndUserId(jobId: UUID, userId: Long): Boolean

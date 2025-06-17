@@ -3,16 +3,16 @@ package org.rucca.snake.worker.infra.storage
 import io.minio.*
 import io.minio.errors.ErrorResponseException
 import io.minio.errors.MinioException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Value
-import org.springframework.stereotype.Service
 import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.time.ZonedDateTime
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Value
+import org.springframework.stereotype.Service
 
 // Simple data class to hold object metadata we might need
 data class MinioObjectInfo(
@@ -26,8 +26,7 @@ data class MinioObjectInfo(
 class MinioService(private val minioClient: MinioClient) {
     private val logger = LoggerFactory.getLogger(MinioService::class.java)
 
-    @Value("\${minio.bucketName}")
-    private lateinit var bucketName: String
+    @Value("\${minio.bucketName}") private lateinit var bucketName: String
 
     /**
      * Ensures the bucket exists, creates it if not. Should be called once on application startup if
@@ -134,8 +133,7 @@ class MinioService(private val minioClient: MinioClient) {
                 // Clean up potentially partially downloaded file
                 try {
                     Files.deleteIfExists(destinationPath)
-                } catch (_: Exception) {
-                }
+                } catch (_: Exception) {}
                 false
             }
         }
@@ -197,8 +195,8 @@ class MinioService(private val minioClient: MinioClient) {
     }
 
     /**
-     * Uploads data from an InputStream to MinIO.
-     * Suitable for uploading dynamic content like source code strings.
+     * Uploads data from an InputStream to MinIO. Suitable for uploading dynamic content like source
+     * code strings.
      *
      * @param objectKey The key (path) under which to store the object.
      * @param inputStream The stream containing the data to upload.
@@ -210,19 +208,26 @@ class MinioService(private val minioClient: MinioClient) {
         objectKey: String,
         inputStream: InputStream,
         size: Long,
-        contentType: String = "application/octet-stream"
+        contentType: String = "application/octet-stream",
     ): Boolean {
         // Use try-with-resources for the input stream if passed from outside and needs closing,
         // but ByteArrayInputStream doesn't strictly need it.
         return withContext(Dispatchers.IO) {
             try {
-                val args = PutObjectArgs.builder()
-                    .bucket(bucketName)
-                    .`object`(objectKey)
-                    .stream(inputStream, size, -1) // size is required, partSize -1 for unknown/single part
-                    .contentType(contentType)
-                    .build()
-                minioClient.putObject(args) // putObject returns ObjectWriteResponse, we just check for exception
+                val args =
+                    PutObjectArgs.builder()
+                        .bucket(bucketName)
+                        .`object`(objectKey)
+                        .stream(
+                            inputStream,
+                            size,
+                            -1,
+                        ) // size is required, partSize -1 for unknown/single part
+                        .contentType(contentType)
+                        .build()
+                minioClient.putObject(
+                    args
+                ) // putObject returns ObjectWriteResponse, we just check for exception
                 logger.info("Successfully uploaded stream to MinIO as '{}'.", objectKey)
                 true // Indicate success
             } catch (e: Exception) {
