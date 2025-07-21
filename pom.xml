@@ -44,7 +44,7 @@
         <asm.version>9.7.1</asm.version>
         <hypersistence.version>3.9.9</hypersistence.version>
         <openapi-generator.version>7.11.0</openapi-generator.version>
-        <spotless.version>2.44.2</spotless.version>
+        <spotless.version>2.46.0</spotless.version>
         <jacoco.version>0.8.12</jacoco.version>
         <maven-surefire.version>3.5.2</maven-surefire.version>
         <maven-antrun.version>3.1.0</maven-antrun.version>
