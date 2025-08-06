@@ -147,7 +147,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Download Worker's Jar
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: backend-worker-jar
 
@@ -157,7 +157,7 @@ jobs:
           mv *.jar backend-worker/target/snake-worker.jar || echo "Worker JAR move failed/skipped"
 
       - name: Download Controller's Jar
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: backend-controller-jar
 
