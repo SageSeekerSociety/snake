@@ -29,6 +29,21 @@ services:
       retries: 5
       start_period: 30s
 
+  valkey:
+    image: valkey/valkey:latest
+    env_file: .env
+    ports:
+      - "6379:6379"
+    volumes:
+      - type: volume
+        source: valkey_data
+        target: /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-h", "localhost", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
   frontend:
     image: ${FRONTEND_IMAGE:-ghcr.io/sageseekersociety/snake-frontend:${FRONTEND_TAG:-main}}
     env_file: .env
@@ -150,6 +165,7 @@ services:
 volumes:
   rabbitmq_data:
   minio_data:
+  valkey_data:
   backend_worker_data:
   backend_worker_cache:
   cheese_auth_uploads:
