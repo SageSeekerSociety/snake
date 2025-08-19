@@ -2,7 +2,6 @@ package org.rucca.snake.controller.infra.amqp
 
 import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.rabbitmq.client.Channel
 import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
 import java.util.*
@@ -41,6 +40,7 @@ class ResultListener(
     private val jobQueryService: JobQueryService,
     private val connectionFactory: ConnectionFactory,
     @Value("\${amqp.queue.results:oj.results.notify}") private val queueName: String,
+    @Value("\${amqp.listener.prefetch:10}") private val prefetchCount: Int,
 ) {
     private val logger = LoggerFactory.getLogger(ResultListener::class.java)
 
@@ -54,26 +54,25 @@ class ResultListener(
         val container = SimpleMessageListenerContainer(connectionFactory)
         container.setQueueNames(queueName)
         container.acknowledgeMode = AcknowledgeMode.MANUAL
-        container.setPrefetchCount(10) // Adjust based on processing capacity
+        container.setPrefetchCount(prefetchCount) // Adjust based on processing capacity
         container.setDefaultRequeueRejected(false)
 
         // Creates a Kotlin Flow from the callback-based message listener.
-        val messageFlow =
-            callbackFlow<Pair<Message, Channel>> {
-                val listener = ChannelAwareMessageListener { message, channel ->
-                    trySend(message to channel!!)
-                }
-                container.setMessageListener(listener)
-
-                container.start()
-                logger.info("Reactive RabbitMQ listener started for queue: [{}]", queueName)
-
-                // Defines cleanup logic for when the consuming coroutine is cancelled.
-                awaitClose {
-                    logger.info("Stopping RabbitMQ listener container for queue: [{}]", queueName)
-                    container.stop()
-                }
+        val messageFlow = callbackFlow {
+            val listener = ChannelAwareMessageListener { message, channel ->
+                trySend(message to channel!!)
             }
+            container.setMessageListener(listener)
+
+            container.start()
+            logger.info("Reactive RabbitMQ listener started for queue: [{}]", queueName)
+
+            // Defines cleanup logic for when the consuming coroutine is cancelled.
+            awaitClose {
+                logger.info("Stopping RabbitMQ listener container for queue: [{}]", queueName)
+                container.stop()
+            }
+        }
 
         // Launches a long-running coroutine to consume and process messages from the flow.
         messageFlow
@@ -133,20 +132,8 @@ class ResultListener(
             messageType,
         )
 
-        // 1. Fetch the authoritative, persisted job data from the database.
-        val finalResultDto =
-            jobQueryService.getJobStatusAndResult(jobUUID)
-                ?: throw RuntimeException("Job record not found in DB for job ID: $jobUUID")
+        var sseEvent: JobSseEvent? = null
 
-        // 2. Convert the DTO to a mutable map to serve as the base for our SSE event data.
-        val baseEventData: MutableMap<String, Any?> =
-            objectMapper.convertValue(
-                finalResultDto,
-                object : TypeReference<MutableMap<String, Any?>>() {},
-            )
-
-        // 3. Perform business logic and enrich the event data with transient info from the AMQP
-        // message.
         when (messageType) {
             AmqpConstants.MESSAGE_TYPE_COMPILE_RESULT -> {
                 val notification =
@@ -162,6 +149,26 @@ class ResultListener(
                         compileTime = notification.timestamp,
                     )
                 }
+
+                // Fetch full data for compilation as it's less frequent and has fewer fields
+                val finalResultDto =
+                    jobQueryService.getJobStatusAndResult(jobUUID)
+                        ?: throw RuntimeException("Job record not found in DB for job ID: $jobUUID")
+
+                val eventData: Map<String, Any?> =
+                    objectMapper.convertValue(
+                        finalResultDto,
+                        object : TypeReference<Map<String, Any?>>() {},
+                    )
+
+                sseEvent =
+                    JobSseEvent(
+                        jobId = correlationId,
+                        eventType = "FINAL_RESULT",
+                        status = notification.status,
+                        message = "Job finished with status: ${notification.status}",
+                        data = eventData,
+                    )
             }
 
             AmqpConstants.MESSAGE_TYPE_EXECUTE_RESULT -> {
@@ -172,10 +179,37 @@ class ResultListener(
                     notification.status,
                 )
 
-                // Enrich the base data with transient info from the notification.
-                baseEventData["action"] = notification.action
-                baseEventData["tickNumber"] = notification.tickNumber
-                baseEventData["newMemoryData"] = notification.newMemoryData
+                // Build the event data directly from the "fat" notification
+                // to match the structure of ExecutionJobResultDto
+                val eventData =
+                    mapOf(
+                        "jobId" to notification.jobId,
+                        "userId" to notification.userId,
+                        "status" to notification.status,
+                        "submitTime" to notification.submitTime,
+                        "startTime" to notification.startTime,
+                        "endTime" to notification.endTime,
+                        "errorDetails" to notification.errorDetails,
+                        "workerNodeId" to notification.workerNodeId,
+                        "programOutput" to notification.action,
+                        "cpuTimeSeconds" to notification.cpuTimeSeconds,
+                        "memoryKb" to notification.memoryKb,
+                        "exitCode" to notification.exitCode,
+                        "sandboxLogRef" to notification.sandboxLogRef,
+                        "clientRequestId" to notification.clientRequestId,
+                        "action" to notification.action,
+                        "tickNumber" to notification.tickNumber,
+                        "newMemoryData" to notification.newMemoryData,
+                    )
+
+                sseEvent =
+                    JobSseEvent(
+                        jobId = correlationId,
+                        eventType = "FINAL_RESULT",
+                        status = notification.status,
+                        message = "Job finished with status: ${notification.status}",
+                        data = eventData,
+                    )
             }
 
             else -> {
@@ -187,17 +221,10 @@ class ResultListener(
             }
         }
 
-        // 4. Publish the final, enriched event to the appropriate SSE stream.
-        jobFlowService.publishEvent(
-            jobUUID,
-            JobSseEvent(
-                jobId = correlationId,
-                eventType = "FINAL_RESULT",
-                status = finalResultDto.status,
-                message = "Job finished with status: ${finalResultDto.status}",
-                data = baseEventData,
-            ),
-        )
+        // Publish the final, enriched event to the appropriate SSE stream.
+        if (sseEvent != null) {
+            jobFlowService.publishEvent(jobUUID, sseEvent)
+        }
     }
 
     /**

@@ -84,11 +84,7 @@ application:
   concurrency:
     nsjail-permits: 8 # 同时运行的 nsjail 数量限制 (基于资源)
     max-worker-jobs: 8 # 同时运行的 nsjail 数量限制 (基于资源)
-  polling: # 主动拉取配置
-    idle-delay-ms: 20 # 队列空闲时的轮询间隔
-    busy-delay-ms: 100 # Worker 忙时的轮询间隔 (等待更长时间)
-    receive-timeout-ms: 10 # 拉取时阻塞
-
+  node-id: ${NODE_ID:worker-1} # Worker 节点 ID，通常用于标识不同的 Worker 实例
 # --- AMQP (RabbitMQ) 配置 ---
 amqp:
   queue:
@@ -110,7 +106,7 @@ amqp:
   # RabbitMQ Listener Configuration
   listener:
     # This value should ideally be aligned with applicationConfig.concurrency.maxWorkerJobs
-    prefetch: 10
+    prefetch: 8
     retry:
       initial-interval: 1000
       max-interval: 10000
