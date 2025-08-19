@@ -209,6 +209,7 @@ class ResultListener(
                         status = notification.status,
                         message = "Job finished with status: ${notification.status}",
                         data = eventData,
+                        sessionId = notification.sessionId,
                     )
             }
 

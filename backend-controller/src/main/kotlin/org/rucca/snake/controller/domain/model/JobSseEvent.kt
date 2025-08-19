@@ -9,4 +9,5 @@ data class JobSseEvent(
     val status: JobStatus? = null, // Current status (if applicable)
     val message: String? = null, // Optional message/details
     val data: Any? = null, // Payload specific to event type (e.g., output lines, final result DTO)
+    val sessionId: String? = null, // Optional session ID if relevant (e.g., for execution jobs)
 )

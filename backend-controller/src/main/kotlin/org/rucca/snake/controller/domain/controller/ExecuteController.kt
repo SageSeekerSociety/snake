@@ -6,7 +6,7 @@ import java.time.Duration
 import java.util.*
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.filter
 import org.rucca.cheese.auth.AuthenticationService
 import org.rucca.cheese.auth.annotation.Guard
 import org.rucca.snake.controller.domain.model.ApiError
@@ -162,92 +162,100 @@ class ExecuteController(
                     return emitter
                 }
 
+        // Launch the main coroutine to manage the stream's lifecycle.
         controllerScope.launch {
             try {
-                val flowsToMerge =
-                    jobFlowService.getJobFlowsBySessionId(sessionIdAsUUID, currentUserId, fromTick)
-
-                if (flowsToMerge.isEmpty()) {
-                    logger.warn(
-                        "No active jobs found for session {}. Completing SSE stream.",
-                        sessionId,
-                    )
-                    emitter.send(
-                        SseEmitter.event()
-                            .name("NO_JOBS")
-                            .data("No active jobs found for this session.")
-                    )
-                    emitter.complete()
-                    return@launch
+                // Launch a heartbeat coroutine to keep the connection alive through proxies.
+                val heartbeatJob = launch {
+                    while (isActive) {
+                        delay(25.seconds)
+                        emitter.send(SseEmitter.event().comment("heartbeat"))
+                    }
                 }
 
-                val mergedFlow = merge(*flowsToMerge.toTypedArray())
-                var activeJobCount = flowsToMerge.size
-
+                // Launch the primary job to collect and send events.
                 collectingJob =
                     launch(Dispatchers.IO + CoroutineName("SseSessionCollector-$sessionId")) {
-                        mergedFlow.collect { event ->
-                            try {
-                                val originalEventData =
-                                    event.data as? Map<*, *> ?: emptyMap<Any, Any>()
-                                val clientEventData = originalEventData.toMutableMap()
-                                val eventAiUserId = clientEventData["aiUserId"] as? Long
-                                val eventSessionId = clientEventData["sessionId"] as? String
+                        // 1. Get the single, session-level flow. This will emit events for all
+                        //    jobs associated with this session, both past and future.
+                        val sessionFlow = jobFlowService.getSessionFlow(sessionIdAsUUID)
 
-                                if (eventAiUserId != currentUserId || eventSessionId != sessionId) {
-                                    clientEventData.remove("newMemoryData")
-                                }
-
-                                val sseEvent =
-                                    SseEmitter.event()
-                                        .id(UUID.randomUUID().toString())
-                                        .name(event.eventType)
-                                        .data(
-                                            event.copy(data = clientEventData),
-                                            MediaType.APPLICATION_JSON,
-                                        )
-
-                                emitter.send(sseEvent)
-
-                                if (
-                                    event.eventType == "FINAL_RESULT" || event.eventType == "ERROR"
-                                ) {
-                                    activeJobCount--
-                                    if (activeJobCount <= 0) {
-                                        launch {
-                                            delay(1.seconds.inWholeMilliseconds)
-                                            logger.info(
-                                                "Completing batch SSE emitter as all tracked jobs finished for session {}.",
-                                                sessionId,
-                                            )
-                                            emitter.complete()
-                                        }
-                                    }
-                                }
-                            } catch (ioe: IOException) {
-                                throw CancellationException("Client disconnected", ioe)
-                            } catch (e: Exception) {
-                                logger.error(
-                                    "Error sending batch SSE event for session {}: {}",
-                                    sessionId,
-                                    e.message,
-                                )
-                                throw CancellationException("SSE send error", e)
+                        // 2. Filter the stream based on the 'fromTick' parameter and collect
+                        // events.
+                        sessionFlow
+                            .filter { event ->
+                                val eventData = event.data as? Map<*, *>
+                                val eventTick = eventData?.get("tickNumber") as? Number
+                                // Pass through events without a tick (e.g., global errors) or
+                                // events >= fromTick.
+                                eventTick == null || eventTick.toLong() >= fromTick
                             }
-                        }
+                            .collect { event ->
+                                try {
+                                    // 3. Filter sensitive data before sending.
+                                    val originalEventData =
+                                        event.data as? Map<*, *> ?: emptyMap<Any, Any>()
+                                    val clientEventData = originalEventData.toMutableMap()
+
+                                    val eventAiUserId =
+                                        clientEventData["userId"]
+                                            as? Long // Assuming key is 'userId' in final DTO
+                                    if (eventAiUserId != currentUserId) {
+                                        clientEventData.remove("newMemoryData")
+                                    }
+
+                                    // 4. Construct and send the SSE event.
+                                    val sseEvent =
+                                        SseEmitter.event()
+                                            .id(UUID.randomUUID().toString())
+                                            .name(event.eventType)
+                                            .data(
+                                                event.copy(data = clientEventData),
+                                                MediaType.APPLICATION_JSON,
+                                            )
+
+                                    emitter.send(sseEvent)
+                                } catch (ioe: IOException) {
+                                    throw CancellationException("Client disconnected.", ioe)
+                                } catch (e: Exception) {
+                                    logger.error(
+                                        "Error sending event for session {}: {}",
+                                        sessionId,
+                                        e.message,
+                                    )
+                                    // Cancel the collector job on send error. The emitter's onError
+                                    // will be triggered.
+                                    throw CancellationException("Failed to send SSE event.", e)
+                                }
+                            }
                     }
+
+                // Suspend the main coroutine until its children (heartbeat, collector) are
+                // cancelled.
+                joinAll(heartbeatJob, collectingJob!!)
+            } catch (e: CancellationException) {
+                // This is the expected path for graceful termination.
+                logger.info(
+                    "SSE Stream coroutine for session {} was cancelled: {}",
+                    sessionId,
+                    e.message,
+                )
             } catch (e: Exception) {
+                // Catch any other unexpected errors during stream setup.
                 logger.error(
-                    "Failed to establish SSE stream for session {}: {}",
+                    "A critical error occurred in the SSE stream for session {}: {}",
                     sessionId,
                     e.message,
                     e,
                 )
                 try {
                     emitter.completeWithError(e)
-                } catch (_: Exception) {}
+                } catch (t: Throwable) {
+                    logger.warn("Failed to send error to a likely closed SSE stream: {}", t.message)
+                }
             }
         }
+
         return emitter
     }
 

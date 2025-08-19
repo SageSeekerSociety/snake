@@ -45,4 +45,6 @@ data class ExecutionJobResultDto(
     val exitCode: Int?, // Specific to execution
     val sandboxLogRef: String?, // Specific to execution (optional)
     val clientRequestId: String?,
+    val sessionId: String?,
+    val tickNumber: Int?,
 ) : JobResultDto

@@ -1,5 +1,7 @@
 package org.rucca.snake.worker.infra.amqp
 
+import java.time.Instant
+import java.util.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
@@ -12,8 +14,6 @@ import org.springframework.amqp.AmqpException
 import org.springframework.amqp.rabbit.core.RabbitTemplate
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
-import java.time.Instant
-import java.util.*
 
 @Service
 class ResultNotifier(

@@ -1,5 +1,14 @@
 package org.rucca.snake.worker.domain.service
 
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.time.Duration
+import java.time.Instant
+import java.util.*
+import java.util.concurrent.TimeUnit
+import java.util.regex.Pattern
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -15,15 +24,6 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.stereotype.Service
-import java.io.IOException
-import java.nio.file.Files
-import java.nio.file.Path
-import java.nio.file.Paths
-import java.time.Duration
-import java.time.Instant
-import java.util.*
-import java.util.concurrent.TimeUnit
-import java.util.regex.Pattern
 
 @Service
 class ExecuteService(
@@ -234,9 +234,13 @@ class ExecuteService(
             }
 
             // 5. Execute in Sandbox (using Semaphore)
+            logger.debug("Job {} WAITING for nsjail permit...", jobId)
+            val startTimeNsjailWait = System.nanoTime()
+
             val nsjailResult: NsjailResult =
                 nsjailSemaphore.withPermit {
-                    logger.info("Acquired nsjail permit for job {}", jobId)
+                    val waitTimeMs = (System.nanoTime() - startTimeNsjailWait) / 1_000_000.0
+                    logger.info("Acquired nsjail permit for job {} in {} ms", jobId, waitTimeMs)
                     val res =
                         runNsjail(
                             userId = aiOwnerUserId, // Pass aiOwnerUserId
