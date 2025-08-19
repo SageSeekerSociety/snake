@@ -1,5 +1,6 @@
 package org.rucca.snake.controller.domain.service
 
+import jakarta.annotation.PreDestroy
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.minutes
@@ -26,6 +27,8 @@ class JobFlowService(
     // Use BufferOverflow.DROP_OLDEST or similar strategy if backpressure is a concern
     private val jobFlows = ConcurrentHashMap<UUID, MutableSharedFlow<JobSseEvent>>()
 
+    private val sessionFlows = ConcurrentHashMap<UUID, MutableSharedFlow<JobSseEvent>>()
+
     // Timeout for inactive flows (e.g., 5 minutes after last update/access)
     private val flowTimeout = 5.minutes
 
@@ -50,8 +53,24 @@ class JobFlowService(
                 )
 
             // Launch a cleanup task for this specific flow when it's created
-            launchFlowCleanup(newJobId, newFlow)
+            launchFlowCleanup(newJobId, newFlow, "Job")
             newFlow
+        }
+    }
+
+    /**
+     * Gets or creates a session-level SharedFlow. This flow aggregates all events for a given
+     * session. This is the primary method the SSE controller should use.
+     */
+    fun getSessionFlow(sessionId: UUID): SharedFlow<JobSseEvent> {
+        return sessionFlows.computeIfAbsent(sessionId) { newSessionId ->
+            logger.info("Creating new Session-level SharedFlow for sessionId: {}", newSessionId)
+            MutableSharedFlow<JobSseEvent>(
+                    replay = Int.MAX_VALUE, // Also replay for late-joining spectators
+                    extraBufferCapacity = 64, // Larger buffer for session
+                    onBufferOverflow = BufferOverflow.DROP_OLDEST,
+                )
+                .also { launchFlowCleanup(newSessionId, it, "Session") }
         }
     }
 
@@ -85,112 +104,74 @@ class JobFlowService(
      * potentially JobSubmitService for initial status.
      */
     suspend fun publishEvent(jobId: UUID, event: JobSseEvent) {
-        val flow = jobFlows[jobId]
-        if (flow != null) {
-            logger.debug("Publishing event for jobId {}: {}", jobId, event.eventType)
-            flow.emit(event)
+        // 1. Emit to the individual job's flow (for potential direct job listeners)
+        jobFlows[jobId]?.emit(event)
+            ?: logger.warn("Job flow for {} not found, cannot publish event.", jobId)
 
-            if (event.eventType == "FINAL_RESULT" || event.eventType == "ERROR") {
-                logger.info(
-                    "Terminal event '{}' received for job {}. Scheduling flow for cleanup.",
-                    event.eventType,
-                    jobId,
-                )
-                // Delay removal to allow subscribers to receive the final event
-                removeFlow(jobId, delayMillis = 1.minutes.inWholeMilliseconds)
+        // 2. If the event has a sessionId, also emit it to the session-level flow.
+        event.sessionId?.let { sidString ->
+            try {
+                val sessionId = UUID.fromString(sidString)
+                // Ensure the session flow exists, then emit.
+                getSessionFlow(sessionId).let { sessionFlow ->
+                    (sessionFlow as? MutableSharedFlow)?.emit(event)
+                }
+            } catch (e: IllegalArgumentException) {
+                logger.error("Invalid sessionId format in event for job {}: {}", jobId, sidString)
             }
-        } else {
-            // This might happen if the result comes after the flow has timed out/been removed
-            logger.warn("Attempted to publish event for non-existent or timed-out flow: {}", jobId)
-            // Option: Could fetch final result from DB and create a short-lived flow? Or just
-            // ignore.
+        }
+
+        if (event.eventType == "FINAL_RESULT" || event.eventType == "ERROR") {
+            removeFlow(jobId, jobFlows, "Job", 1.minutes.inWholeMilliseconds)
         }
     }
 
     /** Publishes an error event. */
-    suspend fun publishError(jobId: UUID, message: String, details: Any? = null) {
+    suspend fun publishError(
+        jobId: UUID,
+        message: String,
+        details: Any? = null,
+        sessionId: String? = null,
+    ) {
         val event =
             JobSseEvent(
                 jobId = jobId.toString(),
                 eventType = "ERROR",
                 message = message,
                 data = details,
+                sessionId = sessionId,
             )
         publishEvent(jobId, event)
-        // Also consider removing flow after error
-        // removeFlow(jobId, delayMillis = 10000)
     }
 
-    /** Launches a coroutine that monitors a flow for inactivity and removes it. */
     @OptIn(FlowPreview::class)
-    private fun launchFlowCleanup(jobId: UUID, flow: MutableSharedFlow<JobSseEvent>) {
+    private fun launchFlowCleanup(id: UUID, flow: MutableSharedFlow<*>, type: String) {
         scope.launch {
-            try {
-                // Wait for subscribers for a short period, then monitor activity
-                var hasSubscribers = false
-                val subscriberTimeout =
-                    flowTimeout / 2 // Wait half the timeout for initial subscriber
-                withTimeoutOrNull(subscriberTimeout) {
-                    flow.subscriptionCount
-                        .filter { it > 0 }
-                        .first() // Wait until at least one subscriber joins
-                    hasSubscribers = true
-                }
+            // Wait until there are no subscribers for the entire timeout duration
+            flow.subscriptionCount
+                .debounce(flowTimeout)
+                .filter { it == 0 }
+                .first() // This will suspend until the condition is met
 
-                if (!hasSubscribers) {
-                    logger.info(
-                        "Flow for jobId {} timed out waiting for initial subscribers. Removing.",
-                        jobId,
-                    )
-                    removeFlow(jobId)
-                    return@launch
-                }
-
-                // Monitor for inactivity (no subscribers) using debounce
-                // Debounce emits only after a specified duration of silence
-                flow.subscriptionCount
-                    .debounce(flowTimeout) // Emit only if count stays 0 for flowTimeout duration
-                    .filter { it == 0 } // Only proceed if the count is 0 after the debounce period
-                    .firstOrNull() // Take the first occurrence of inactivity timeout
-
-                // If we reach here, it means the flow was inactive (0 subscribers) for the timeout
-                // duration
-                logger.info(
-                    "Flow for jobId {} timed out due to inactivity ({} duration). Removing.",
-                    jobId,
-                    flowTimeout,
-                )
-                removeFlow(jobId)
-            } catch (e: CancellationException) {
-                logger.info("Flow cleanup task for jobId {} cancelled.", jobId)
-                removeFlow(jobId) // Ensure removal on cancellation
-            } catch (e: Exception) {
-                logger.error("Error in flow cleanup task for jobId {}: {}", jobId, e.message, e)
-                removeFlow(jobId) // Attempt removal on error
+            logger.info("{} flow for ID {} timed out due to inactivity. Removing.", type, id)
+            if (type == "Job") {
+                jobFlows.remove(id)
+            } else {
+                sessionFlows.remove(id)
             }
         }
     }
 
-    /** Removes the flow from the map. */
-    private fun removeFlow(jobId: UUID, delayMillis: Long = 0) {
-        // Optional delay before removal
-        if (delayMillis > 0) {
-            scope.launch {
-                delay(delayMillis)
-                val removedFlow = jobFlows.remove(jobId)
-                if (removedFlow != null) {
-                    logger.info("Delayed removal of flow for jobId: {}", jobId)
-                }
-            }
-        } else {
-            val removedFlow = jobFlows.remove(jobId)
-            if (removedFlow != null) {
-                logger.info("Removed flow for jobId: {}", jobId)
+    private fun removeFlow(id: UUID, map: MutableMap<*, *>, type: String, delayMillis: Long) {
+        scope.launch {
+            if (delayMillis > 0) delay(delayMillis)
+            if (map.remove(id) != null) {
+                logger.info("Removed {} flow for ID: {}", type, id)
             }
         }
     }
 
-    // Called during application shutdown
+    @PreDestroy
     fun cleanupAllFlows() {
         logger.info("Cleaning up all active job flows...")
         scope.cancel("Application shutdown cleanup")

@@ -270,6 +270,7 @@ class JobSubmitService(
                                 "sessionId" to finalSessionId,
                                 "requestingUserId" to requestingUserId,
                             ),
+                        sessionId = finalSessionId,
                     ),
                 )
                 results[resultKey] =
@@ -294,6 +295,7 @@ class JobSubmitService(
                             "sessionId" to finalSessionId,
                             "requestingUserId" to requestingUserId,
                         ),
+                        sessionId = finalSessionId,
                     )
                 }
                 results[resultKey] = Result.failure(e) // Return failure with exception
