@@ -1,18 +1,10 @@
 package org.rucca.snake.worker.domain.service
 
-import java.io.IOException
-import java.nio.file.Files
-import java.nio.file.Path
-import java.nio.file.Paths
-import java.time.Duration
-import java.time.Instant
-import java.util.*
-import java.util.concurrent.TimeUnit
-import java.util.regex.Pattern
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import org.rucca.snake.common.domain.model.ExecutionRequest
+import org.rucca.snake.common.domain.model.ExecutionResultNotification
 import org.rucca.snake.common.domain.model.JobStatus
 import org.rucca.snake.common.infra.persistence.repository.ExecutionJobRepository
 import org.rucca.snake.worker.config.ApplicationConfig
@@ -23,6 +15,15 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.stereotype.Service
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.time.Duration
+import java.time.Instant
+import java.util.*
+import java.util.concurrent.TimeUnit
+import java.util.regex.Pattern
 
 @Service
 class ExecuteService(
@@ -118,15 +119,26 @@ class ExecuteService(
                     endTime = Instant.now(),
                 )
                 resultNotifier.notifyExecutionResult(
-                    UUID.fromString(jobId),
-                    aiOwnerUserId,
-                    JobStatus.ERROR,
-                    null,
-                    null, // newMemoryData
-                    sessionId,
-                    tickNumber,
-                    // errorDetails = "Failed to read previous memory from Redis: ${e.message}" //
-                    // DTO needs update for this
+                    ExecutionResultNotification(
+                        jobId = jobId,
+                        userId = aiOwnerUserId,
+                        status = JobStatus.ERROR,
+                        sessionId = sessionId, // No memory to store
+                        tickNumber = tickNumber,
+                        cpuTimeSeconds = null,
+                        memoryKb = null,
+                        exitCode = null,
+                        action = null,
+                        newMemoryData = null,
+                        errorDetails =
+                            "Failed to read previous memory from Redis for job $jobId: ${e.message}", // No log to upload
+                        sandboxLogRef = null,
+                        clientRequestId = request.clientRequestId,
+                        workerNodeId = applicationConfig.nodeId,
+                        submitTime = request.timestamp,
+                        startTime = startTime,
+                        endTime = Instant.now(),
+                    )
                 )
                 throw RuntimeException(
                     "Failed to read previous memory from Redis for job $jobId",
@@ -406,25 +418,36 @@ class ExecuteService(
                 jobId = jobId,
                 status = currentStatus,
                 endTime = Instant.now(),
-                programOutput = action, // <<< MODIFIED HERE
+                programOutput = action,
                 cpuTimeSeconds = cpuTimeSeconds,
                 memoryKb = memoryKb,
                 exitCode = exitCode,
-                sandboxLogRef = finalLogRef, // Optional
+                sandboxLogRef = finalLogRef,
                 errorDetails = errorDetails,
             )
 
             // Notify result
             resultNotifier.notifyExecutionResult(
-                jobId = UUID.fromString(jobId),
-                userId = aiOwnerUserId, // Use aiOwnerUserId
-                status = currentStatus,
-                action = action, // <<< ADDED HERE
-                newMemoryData =
-                    if (currentStatus == JobStatus.SUCCESS) memoryDataForRedis else null,
-                sessionId = sessionId,
-                tickNumber = tickNumber,
-                // errorDetails = errorDetails // DTO needs update for this
+                ExecutionResultNotification(
+                    jobId = jobId,
+                    userId = aiOwnerUserId,
+                    status = currentStatus,
+                    sessionId = sessionId,
+                    tickNumber = tickNumber,
+                    cpuTimeSeconds = cpuTimeSeconds,
+                    memoryKb = memoryKb,
+                    exitCode = exitCode,
+                    action = action.takeIf { it.isNotBlank() },
+                    newMemoryData =
+                        if (currentStatus == JobStatus.SUCCESS) memoryDataForRedis else null,
+                    errorDetails = errorDetails.takeUnless { it.isNullOrBlank() },
+                    sandboxLogRef = finalLogRef,
+                    clientRequestId = request.clientRequestId,
+                    workerNodeId = applicationConfig.nodeId,
+                    submitTime = request.timestamp,
+                    startTime = startTime,
+                    endTime = Instant.now(),
+                )
             )
 
             // 8. Cleanup execution-specific directory (input, log)
@@ -791,7 +814,7 @@ class ExecuteService(
                 job.exitCode = exitCode
                 job.sandboxLogRef = sandboxLogRef
                 job.errorDetails = errorDetails
-                // job.workerNodeId = appConfig.workerId
+                //                job.workerNodeId = appConfig.workerId
                 executionJobRepository.save(job)
                 logger.info("Updated execution job {} status to {}", jobId, status)
             } catch (e: Exception) {

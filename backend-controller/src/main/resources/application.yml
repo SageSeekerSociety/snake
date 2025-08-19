@@ -61,6 +61,8 @@ amqp:
     result: result.notify         # (可选) 结果路由键
     # compile-dlq: task.compile.dlq # (可选) 死信路由键
     # execute-dlq: task.execute.dlq # (可选) 死信路由键
+  listener:
+    prefetch: 10
 
 # --- MinIO 配置 ---
 minio:
