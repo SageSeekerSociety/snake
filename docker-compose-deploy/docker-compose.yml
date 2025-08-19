@@ -85,6 +85,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      valkey:
+        condition: service_healthy
       cheese-auth-database:
         condition: service_healthy
     volumes:
