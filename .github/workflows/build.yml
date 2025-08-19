@@ -24,35 +24,18 @@ jobs:
           distribution: "temurin"
           cache: "maven"
 
-      - name: Start Dependencies
+      - name: Start Dependencies for Build
         run: |
           cp docker-compose-dependency/sample.env docker-compose-dependency/.env
           docker compose -f docker-compose-dependency/docker-compose.yml up -d
 
-      - name: Install nsjail
+      - name: Install nsjail for Build
         run: |
           sudo apt-get -y update && sudo apt-get install -y \
-            libc6 \
-            libstdc++6 \
-            libprotobuf32 \
-            libnl-route-3-200 \
-            autoconf \
-            bison \
-            flex \
-            gcc \
-            g++ \
-            git \
-            libprotobuf-dev \
-            libnl-route-3-dev \
-            libtool \
-            make \
-            pkg-config \
-            protobuf-compiler
+            libc6 libstdc++6 libprotobuf32 libnl-route-3-200 autoconf bison flex \
+            gcc g++ git libprotobuf-dev libnl-route-3-dev libtool make pkg-config protobuf-compiler
           sudo git clone --depth 1 https://github.com/SageSeekerSociety/nsjail.git /usr/local/src/nsjail
-          cd /usr/local/src/nsjail
-          sudo make -j
-
-          # See: https://github.com/google/nsjail/issues/236
+          cd /usr/local/src/nsjail && sudo make -j
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_unconfined=0
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
@@ -83,21 +66,21 @@ jobs:
           path: backend-worker/target/snake.worker-*.jar
           if-no-files-found: error
 
-      - name: Upload Controller coverage report
+      - name: Upload Controller Coverage Report
         uses: actions/upload-artifact@v4
         with:
           name: backend-controller-coverage
           path: backend-controller/target/site/jacoco
           if-no-files-found: warn
 
-      - name: Upload Worker coverage report
+      - name: Upload Worker Coverage Report
         uses: actions/upload-artifact@v4
         with:
           name: backend-worker-coverage
           path: backend-worker/target/site/jacoco
           if-no-files-found: warn
 
-  build-docker:
+  build-docker-and-test:
     runs-on: ubuntu-latest
     needs: build-jar
 
@@ -124,7 +107,7 @@ jobs:
           echo "NSJAIL_REPO=https://github.com/SageSeekerSociety/nsjail.git" >> "$GITHUB_ENV"
           echo "NSJAIL_REF=master" >> "$GITHUB_ENV"
 
-      - name: Login to docker registry
+      - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -142,6 +125,9 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.WORKER_IMAGE_NAME }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -166,60 +152,35 @@ jobs:
           mkdir -p backend-controller/target
           mv *.jar backend-controller/target/snake-controller.jar || echo "Controller JAR move failed/skipped"
 
-      # --- Build Controller Image ---
-      - name: Build and push Controller image
-        id: build_controller
+      - name: Build Controller image for local testing
         uses: docker/build-push-action@v6
         with:
-          context: ${{ github.workspace }}
+          context: .
           file: ./Dockerfile.controller
-          push: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-          tags: ${{ steps.meta_controller.outputs.tags }}
-          labels: ${{ steps.meta_controller.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
           load: true
+          tags: ${{ env.CONTROLLER_IMAGE_NAME }}:test
+          platforms: linux/amd64
 
-      # --- Build Worker Image ---
-      - name: Build and push Worker image
-        id: build_worker
+      - name: Build Worker image for local testing
         uses: docker/build-push-action@v6
         with:
-          context: ${{ github.workspace }}
+          context: .
           file: ./Dockerfile.worker
-          push: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-          tags: ${{ steps.meta_worker.outputs.tags }}
-          labels: ${{ steps.meta_worker.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
           load: true
+          tags: ${{ env.WORKER_IMAGE_NAME }}:test
+          platforms: linux/amd64
           build-args: |
             NSJAIL_REPO=${{ env.NSJAIL_REPO }}
             NSJAIL_BRANCH=${{ env.NSJAIL_REF }}
             CACHE_BUSTER=${{ github.sha }}
 
-      - name: Set Image Names with Determined Tag
-        run: |
-          CONTROLLER_IMAGE_TAG="${{ steps.meta_controller.outputs.version }}"
-          WORKER_IMAGE_TAG="${{ steps.meta_worker.outputs.version }}"
-          echo "CONTROLLER_IMAGE=${REGISTRY}/${CONTROLLER_IMAGE_NAME}:${CONTROLLER_IMAGE_TAG}" >> "$GITHUB_ENV"
-          echo "WORKER_IMAGE=${REGISTRY}/${WORKER_IMAGE_NAME}:${WORKER_IMAGE_TAG}" >> "$GITHUB_ENV"
-
-      - name: Debug Image Variables
-        run: |
-          echo "Controller Image Resolved: ${{ env.CONTROLLER_IMAGE }}"
-          echo "Worker Image Resolved: ${{ env.WORKER_IMAGE }}"
-
-      - name: Create env file
-        working-directory: docker-compose-deploy
-        run: cp sample.env .env
-
-      - name: Set image tags in .env file
+      - name: Set up .env file for Docker Compose
         working-directory: docker-compose-deploy
         run: |
+          cp sample.env .env
           # Use the environment variables containing the full image path with tag
-          echo "CONTROLLER_IMAGE=${{ env.CONTROLLER_IMAGE }}" >> .env
-          echo "WORKER_IMAGE=${{ env.WORKER_IMAGE }}" >> .env
+          echo "CONTROLLER_IMAGE=${{ env.CONTROLLER_IMAGE_NAME }}:test" >> .env
+          echo "WORKER_IMAGE=${{ env.WORKER_IMAGE_NAME }}:test" >> .env
           echo ".env file content for compose:"
           cat .env
 
@@ -233,15 +194,15 @@ jobs:
           docker compose ps -a
 
           # Check if any containers failed to start or exited
-          failed_containers=$(docker compose ps -a | grep -E "Exit|exited" | awk '{print $1}')
+          failed_containers=$(docker compose ps -a | grep -E "unhealthy" | awk '{print $1}')
 
           if [ -n "$failed_containers" ]; then
             echo "=== CRITICAL ERROR: The following containers failed to start ==="
             echo "$failed_containers"
-            
+
             echo "=== Environment Variables ==="
             docker compose config | grep -v -E '^\s*(password|secret|key)'
-            
+
             echo "=== Failed Container Details ==="
             for container in $failed_containers; do
               echo "===== Failed Container: $container ====="
@@ -250,20 +211,20 @@ jobs:
               echo "===== Logs for $container ====="
               docker logs $container 2>&1 || echo "Could not get logs for $container"
             done
-            
+
             # Check controller specifically since that's what's failing
             controller_container=$(echo "$failed_containers" | grep "controller")
             if [ -n "$controller_container" ]; then
               echo "===== Controller Container Environment Variables ====="
               docker inspect $controller_container -f '{{range .Config.Env}}{{println .}}{{end}}'
-              
+
               echo "===== Controller Container Command ====="
               docker inspect $controller_container -f '{{.Config.Cmd}}'
-              
+
               echo "===== Controller Container Entry Point ====="
               docker inspect $controller_container -f '{{.Config.Entrypoint}}'
             fi
-            
+
             # Still output logs for any running containers
             echo "=== Running Service Logs ==="
             running_containers=$(docker compose ps -q)
@@ -272,7 +233,7 @@ jobs:
               echo "===== Logs for running container $container_name ====="
               docker logs $container 2>&1 || echo "Could not get logs for $container_name"
             done
-            
+
             exit 1
           fi
 
@@ -289,12 +250,42 @@ jobs:
 
           if [ $tries -eq $max_tries ]; then
             echo "=== ERROR: Services did not become healthy after $max_tries tries ==="
-            
+
             # Add all previous diagnostic code here...
             # [previous diagnostic code]
-            
+
             exit 1
           fi
 
           echo "All services are healthy!"
           docker compose ps
+
+      - name: Build and push Controller multi-arch image
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.controller
+          push: true
+          tags: ${{ steps.meta_controller.outputs.tags }}
+          labels: ${{ steps.meta_controller.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Worker amd64 image
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.worker
+          push: true
+          tags: ${{ steps.meta_worker.outputs.tags }}
+          labels: ${{ steps.meta_worker.outputs.labels }}
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            NSJAIL_REPO=${{ env.NSJAIL_REPO }}
+            NSJAIL_BRANCH=${{ env.NSJAIL_REF }}
+            CACHE_BUSTER=${{ github.sha }}
