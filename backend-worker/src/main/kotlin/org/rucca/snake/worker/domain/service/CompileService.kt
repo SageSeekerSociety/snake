@@ -1,5 +1,7 @@
 package org.rucca.snake.worker.domain.service
 
+import io.opentelemetry.api.OpenTelemetry
+import io.opentelemetry.instrumentation.annotations.WithSpan
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -16,6 +18,7 @@ import org.rucca.snake.worker.config.ApplicationConfig
 import org.rucca.snake.worker.infra.amqp.ResultNotifier
 import org.rucca.snake.worker.infra.storage.MinioService
 import org.rucca.snake.worker.utils.deleteDirectoryRecursively
+import org.rucca.snake.worker.utils.withSuspendingSpan
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 
@@ -25,7 +28,10 @@ class CompileService(
     private val minioService: MinioService,
     private val resultNotifier: ResultNotifier,
     private val applicationConfig: ApplicationConfig,
+    openTelemetry: OpenTelemetry
 ) {
+    private val tracer = openTelemetry.getTracer(CompileService::class.java.name)
+
     private val logger = LoggerFactory.getLogger(CompileService::class.java)
 
     private val compileTimeoutSeconds: Long = 60 // Default timeout for compilation in seconds
@@ -38,6 +44,7 @@ class CompileService(
      * @param request The compilation request data.
      * @param jobId The unique job ID associated with this request.
      */
+    @WithSpan("job.compile.process")
     suspend fun processCompilationRequest(request: CompilationRequest, jobId: String) {
         val userId = request.userId
         val sourceCodeRef = request.sourceCodeRef
@@ -90,7 +97,9 @@ class CompileService(
                         sourceCodeRef,
                         sourceFilePath,
                     )
-                    minioService.downloadObject(sourceCodeRef, sourceFilePath)
+                    tracer.withSuspendingSpan("minio.download_source") {
+                        minioService.downloadObject(sourceCodeRef, sourceFilePath)
+                    }
                 }
 
             if (!downloadSuccess) {
@@ -132,7 +141,9 @@ class CompileService(
                 logger.info("Compilation successful for job {}", jobId)
 
                 // 5. Upload successful result to MinIO
-                val etag = minioService.uploadFile(compiledProgramObjectKey, outputFilePath)
+                val etag = tracer.withSuspendingSpan("minio.upload_program") {
+                    minioService.uploadFile(compiledProgramObjectKey, outputFilePath)
+                }
                 if (etag == null) {
                     logger.error("Failed to upload compiled program to MinIO for job {}", jobId)
                     currentStatus = JobStatus.ERROR // Indicate an infrastructure error
@@ -192,6 +203,7 @@ class CompileService(
     }
 
     /** Executes the compilation command in a separate process with a timeout. */
+    @WithSpan("compile.command.execute")
     private suspend fun executeCompileCommand(
         sourceFile: Path,
         outputFile: Path,

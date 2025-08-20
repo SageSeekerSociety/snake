@@ -2,6 +2,7 @@ package org.rucca.snake.controller.infra.amqp
 
 import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.databind.ObjectMapper
+import io.opentelemetry.instrumentation.annotations.WithSpan
 import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
 import java.util.*
@@ -107,6 +108,7 @@ class ResultListener(
      *
      * @throws Exception if processing fails, allowing the caller to NACK the message.
      */
+    @WithSpan("job.result.process")
     private suspend fun processMessageInternal(message: Message) {
         val messageBody = String(message.body, Charsets.UTF_8)
         val correlationId = message.messageProperties.correlationId

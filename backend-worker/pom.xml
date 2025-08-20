@@ -172,6 +172,10 @@
             <groupId>io.opentelemetry.instrumentation</groupId>
             <artifactId>opentelemetry-instrumentation-annotations</artifactId>
         </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-extension-kotlin</artifactId>
+        </dependency>
         <!-- 如果需要测试 MinIO 交互，可能需要 testcontainers-minio -->
         <!-- <dependency>
             <groupId>org.testcontainers</groupId>

@@ -1,5 +1,7 @@
 package org.rucca.snake.worker.domain.service
 
+import io.opentelemetry.api.OpenTelemetry
+import io.opentelemetry.instrumentation.annotations.WithSpan
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -8,6 +10,7 @@ import java.nio.file.attribute.FileTime
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -15,14 +18,17 @@ import kotlinx.coroutines.withContext
 import org.rucca.snake.worker.config.ApplicationConfig
 import org.rucca.snake.worker.infra.storage.MinioObjectInfo
 import org.rucca.snake.worker.infra.storage.MinioService
+import org.rucca.snake.worker.utils.withSuspendingSpan
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 
 @Service
 class CacheManager(
     private val minioService: MinioService,
-    private val applicationConfig: ApplicationConfig,
+    applicationConfig: ApplicationConfig,
+    openTelemetry: OpenTelemetry,
 ) {
+    private val tracer = openTelemetry.getTracer(CacheManager::class.java.name)
     private val logger = LoggerFactory.getLogger(CacheManager::class.java)
     private val cacheBasePath: Path = Paths.get(applicationConfig.cache.basePath)
 
@@ -56,6 +62,7 @@ class CacheManager(
      *   "programs/{userId}/program-v1").
      * @return The Path to the locally cached program file, or null if it cannot be obtained.
      */
+    @WithSpan("cache.get_program_path")
     suspend fun getProgramPath(userId: Long, objectKey: String): Path? {
         // Construct local cache path based on objectKey structure or userId
         // Using a structure reflecting the object key might be better if keys include versions
@@ -134,7 +141,7 @@ class CacheManager(
                     // Ensure parent directory exists within the locked section
                     withContext(Dispatchers.IO) { Files.createDirectories(localPath.parent) }
 
-                    val downloadSuccess = minioService.downloadObject(objectKey, localPath)
+                    val downloadSuccess = tracer.withSuspendingSpan("cache.download_on_miss") { minioService.downloadObject(objectKey, localPath) }
                     if (!downloadSuccess) {
                         logger.error(
                             "Failed to download object '{}' for user {}.",

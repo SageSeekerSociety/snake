@@ -1,11 +1,15 @@
 package org.rucca.snake.controller.domain.service
 
-// common module
-// common module
+import io.opentelemetry.api.OpenTelemetry
+import io.opentelemetry.context.Context
+import io.opentelemetry.context.propagation.ContextPropagators
+import io.opentelemetry.context.propagation.TextMapSetter
+import io.opentelemetry.instrumentation.annotations.WithSpan
 import java.io.InputStream
 import java.time.Instant
 import java.util.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
 import org.rucca.snake.common.constants.AmqpConstants
 import org.rucca.snake.common.domain.model.CompilationRequest
@@ -18,8 +22,10 @@ import org.rucca.snake.common.infra.persistence.repository.ExecutionJobRepositor
 import org.rucca.snake.controller.domain.model.BatchExecutionItem
 import org.rucca.snake.controller.domain.model.JobSseEvent
 import org.rucca.snake.controller.infra.storage.MinioService
+import org.rucca.snake.controller.utils.withSuspendingSpan
 import org.slf4j.LoggerFactory
 import org.springframework.amqp.AmqpException
+import org.springframework.amqp.core.MessageProperties
 import org.springframework.amqp.rabbit.core.RabbitTemplate
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.dao.DataAccessException
@@ -33,11 +39,20 @@ class JobSubmitService(
     private val rabbitTemplate: RabbitTemplate,
     private val minioService: MinioService,
     private val jobFlowService: JobFlowService,
+    openTelemetry: OpenTelemetry,
     @Value("\${amqp.exchange.requests}") private val requestsExchangeName: String,
     @Value("\${amqp.routingkey.compile}") private val compileRoutingKey: String,
     @Value("\${amqp.routingkey.execute}") private val executeRoutingKey: String,
 ) {
+    private val tracer = openTelemetry.tracerProvider.get(JobSubmitService::class.java.name)
+    private val propagators: ContextPropagators = openTelemetry.propagators
+
     private val logger = LoggerFactory.getLogger(JobSubmitService::class.java)
+
+    private val rabbitMqSetter =
+        TextMapSetter<MessageProperties> { carrier, key, value ->
+            carrier?.headers?.put(key, value)
+        }
 
     /**
      * Submits a new compilation task. Creates a record in the database and sends a message to the
@@ -54,6 +69,7 @@ class JobSubmitService(
      * @throws RuntimeException for other unexpected errors.
      */
     @Transactional
+    @WithSpan("job.submit.compilation")
     suspend fun submitCompilation(
         userId: Long,
         sourceCodeStream: InputStream,
@@ -68,19 +84,18 @@ class JobSubmitService(
         val uploadSuccess =
             try {
                 withContext(Dispatchers.IO) {
-                    minioService.uploadStream(
-                        objectKey = sourceCodeObjectKey,
-                        inputStream = sourceCodeStream,
-                        size = sourceCodeSize, // Provide size
-                        contentType = "text/plain", // Or "text/x-c++src" etc.
-                    )
+                    tracer.withSuspendingSpan("minio.upload_source_on_submit") {
+                        minioService.uploadStream(
+                            objectKey = sourceCodeObjectKey,
+                            inputStream = sourceCodeStream,
+                            size = sourceCodeSize, // Provide size
+                            contentType = "text/plain", // Or "text/x-c++src" etc.
+                        )
+                    }
                 }
             } catch (e: Exception) {
                 logger.error(
-                    "Failed to upload source code to MinIO for potential job {} (user {}): {}",
-                    jobId,
-                    userId,
-                    e.message,
+                    "Failed to upload source code to MinIO for potential job $jobId (user $userId)",
                     e,
                 )
                 // If upload fails, we cannot proceed. Throw an exception that leads to API error
@@ -181,6 +196,13 @@ class JobSubmitService(
                     message.messageProperties.correlationId = jobId.toString()
                     message.messageProperties.headers[AmqpConstants.HEADER_MESSAGE_TYPE] =
                         AmqpConstants.MESSAGE_TYPE_COMPILE
+
+                    propagators.textMapPropagator.inject(
+                        Context.current(),
+                        message.messageProperties,
+                        rabbitMqSetter,
+                    )
+
                     message
                 }
             }
@@ -236,6 +258,7 @@ class JobSubmitService(
      * @return A map where Key is the clientRequestId (or generated jobId if null) and Value is a
      *   Result indicating success (Ok containing jobId) or failure (Err containing error message).
      */
+    @WithSpan("job.submit.batch_execution")
     suspend fun submitBatchExecution(
         requests: List<BatchExecutionItem>,
         finalSessionId: String,
@@ -396,9 +419,17 @@ class JobSubmitService(
                     message.messageProperties.correlationId = jobId.toString()
                     message.messageProperties.headers[AmqpConstants.HEADER_MESSAGE_TYPE] =
                         AmqpConstants.MESSAGE_TYPE_EXECUTE
-                    // Optional: Pass clientRequestId if worker needs it
-                    // item.clientRequestId?.let {
-                    // message.messageProperties.headers["clientRequestId"] = it }
+
+                    item.clientRequestId?.let {
+                        message.messageProperties.headers["clientRequestId"] = it
+                    }
+
+                    propagators.textMapPropagator.inject(
+                        Context.current(),
+                        message.messageProperties,
+                        rabbitMqSetter,
+                    )
+
                     message
                 }
             }

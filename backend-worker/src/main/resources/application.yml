@@ -47,6 +47,16 @@ management:
   endpoint:
     health:
       show-details: when_authorized
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}
+
+otel:
+  service:
+    name: ${spring.application.name}
+  exporter:
+    otlp:
+      protocol: grpc
 
 application:
   compiler-path: /bin/clang++

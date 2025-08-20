@@ -1,5 +1,8 @@
 package org.rucca.snake.worker.domain.service
 
+import io.opentelemetry.api.OpenTelemetry
+import io.opentelemetry.api.trace.Tracer
+import io.opentelemetry.instrumentation.annotations.WithSpan
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -20,6 +23,8 @@ import org.rucca.snake.worker.config.ApplicationConfig
 import org.rucca.snake.worker.infra.amqp.ResultNotifier
 import org.rucca.snake.worker.infra.storage.MinioService
 import org.rucca.snake.worker.utils.deleteDirectoryRecursively
+import org.rucca.snake.worker.utils.withSpan
+import org.rucca.snake.worker.utils.withSuspendingSpan
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.redis.core.StringRedisTemplate
@@ -32,10 +37,13 @@ class ExecuteService(
     private val resultNotifier: ResultNotifier,
     private val applicationConfig: ApplicationConfig,
     private val minioService: MinioService,
-    private val redisTemplate: StringRedisTemplate, // Added RedisTemplate
-    @Value("\${memory.ttl.minutes}") private val memoryTtlMinutes: Long, // Added memory TTL
-    @Value("\${memory.max.size.kb}") private val memoryMaxSizeKb: Int, // Added memory max size
+    private val redisTemplate: StringRedisTemplate,
+    openTelemetry: OpenTelemetry,
+    @Value("\${memory.ttl.minutes}") private val memoryTtlMinutes: Long,
+    @Value("\${memory.max.size.kb}") private val memoryMaxSizeKb: Int,
 ) {
+    private val tracer: Tracer = openTelemetry.getTracer(ExecuteService::class.java.name)
+
     private val logger = LoggerFactory.getLogger(ExecuteService::class.java)
 
     // Semaphore to limit concurrent nsjail processes
@@ -58,6 +66,7 @@ class ExecuteService(
      * @param request The execution request data.
      * @param jobId The unique job ID.
      */
+    @WithSpan("job.execute.process")
     suspend fun processExecutionRequest(request: ExecutionRequest, jobId: String) {
         // Retrieve new fields from request
         val sessionId = request.sessionId
@@ -97,7 +106,9 @@ class ExecuteService(
             val previousTickNumber = tickNumber - 1
             val redisKey = "session:${sessionId}:memory:${aiOwnerUserId}:${previousTickNumber}"
             try {
-                previousMemoryData = redisTemplate.opsForValue().get(redisKey) ?: ""
+                previousMemoryData = tracer.withSpan("redis.get_memory") {
+                    redisTemplate.opsForValue().get(redisKey) ?: ""
+                }
                 logger.info(
                     "Retrieved previous memory for job {} from Redis key {}",
                     jobId,
@@ -180,7 +191,9 @@ class ExecuteService(
 
             // 3. Get Program Path (from cache or download from MinIO)
             // This function handles cache checking and download internally
-            val programPathInCache = cacheManager.getProgramPath(aiOwnerUserId, minioObjectKey)
+            val programPathInCache = tracer.withSuspendingSpan("cache.get_program") {
+                cacheManager.getProgramPath(aiOwnerUserId, minioObjectKey)
+            }
             if (programPathInCache == null || !Files.exists(programPathInCache)) {
                 logger.error(
                     "Failed to obtain program binary for user {} (job {})",
@@ -333,9 +346,13 @@ class ExecuteService(
             if (currentStatus == JobStatus.SUCCESS && memoryDataForRedis != null) {
                 val redisKey = "session:${sessionId}:memory:${aiOwnerUserId}:${tickNumber}"
                 try {
-                    redisTemplate
-                        .opsForValue()
-                        .set(redisKey, memoryDataForRedis, Duration.ofMinutes(memoryTtlMinutes))
+                    tracer.withSpan("redis.set_memory") {
+                        redisTemplate.opsForValue().set(
+                            redisKey,
+                            memoryDataForRedis,
+                            Duration.ofMinutes(memoryTtlMinutes),
+                        )
+                    }
                     logger.info(
                         "Stored new memory for job {} to Redis key {} with TTL {} mins",
                         jobId,
@@ -484,6 +501,7 @@ class ExecuteService(
     }
 
     /** Runs the nsjail process. */
+    @WithSpan("nsjail.execute")
     private suspend fun runNsjail(
         userId: Long, // For context
         jobId: String, // For context
