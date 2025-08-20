@@ -80,6 +80,12 @@ services:
   backend-controller:
     image: ${CONTROLLER_IMAGE:-ghcr.io/sageseekersociety/snake-controller:${BACKEND_CONTROLLER_TAG:-main}}
     env_file: .env
+    environment:
+      - OTEL_SERVICE_NAME=snake-controller
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_TRACES_EXPORTER=otlp
+      - OTEL_METRICS_EXPORTER=none
+      - MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,prometheus
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -102,6 +108,12 @@ services:
   backend-worker:
     image: ${WORKER_IMAGE:-ghcr.io/sageseekersociety/snake-worker:${BACKEND_WORKER_TAG:-main}}
     env_file: .env
+    environment:
+      - OTEL_SERVICE_NAME=snake-worker
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_TRACES_EXPORTER=otlp
+      - OTEL_METRICS_EXPORTER=none
+      - MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,prometheus
     cgroup: host
     depends_on:
       rabbitmq:
@@ -128,6 +140,49 @@ services:
       timeout: 10s
       retries: 3
     privileged: true
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - "9090:9090"
+    depends_on:
+      - backend-controller
+      - backend-worker
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana-oss:12.0.4
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.72.0
+    container_name: jaeger
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    restart: unless-stopped
 
   cheese-auth:
     image: ${CHEESE_AUTH_IMAGE:-ghcr.io/sageseekersociety/cheese-auth:${CHEESE_AUTH_TAG:-main}}
@@ -168,6 +223,8 @@ volumes:
   rabbitmq_data:
   minio_data:
   valkey_data:
+  prometheus_data:
+  grafana_data:
   backend_worker_data:
   backend_worker_cache:
   cheese_auth_uploads:

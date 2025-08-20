@@ -2,3 +2,5 @@
 cheese-auth.env
 backend-worker.env
 plugins/
+application-controller.yml
+application-worker.yml

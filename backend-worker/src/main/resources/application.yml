@@ -43,10 +43,10 @@ management:
   endpoints:
     web:
       exposure:
-        include: health # 只暴露 health 端点
+        include: health,prometheus
   endpoint:
     health:
-      show-details: when_authorized # 或 always/never
+      show-details: when_authorized
 
 application:
   compiler-path: /bin/clang++

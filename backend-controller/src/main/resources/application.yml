@@ -32,6 +32,16 @@ spring:
 server:
   port: 8080
 
+# --- Actuator 配置 ---
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+
 cheese-auth:
   jwt-secret: ${JWT_SECRET:test-secret}
   warn-audit-failure: true
