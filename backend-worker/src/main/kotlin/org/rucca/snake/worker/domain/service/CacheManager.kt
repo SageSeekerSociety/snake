@@ -1,10 +1,12 @@
 package org.rucca.snake.worker.domain.service
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.FileTime
+import java.security.MessageDigest
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.*
@@ -54,7 +56,9 @@ class CacheManager(
      */
     suspend fun getProgramPath(userId: Long, objectKey: String): Path? {
         val userCacheDir = cacheBasePath.resolve(userId.toString())
-        val localPath = userCacheDir.resolve(Paths.get(objectKey).fileName.toString())
+        val objectKeyHash = hashObjectKey(objectKey)
+        val localPath =
+            userCacheDir.resolve(objectKeyHash).resolve(Paths.get(objectKey).fileName.toString())
 
         val lock = objectLocks.computeIfAbsent(objectKey) { Mutex() }
 
@@ -182,6 +186,12 @@ class CacheManager(
                 return null
             }
         }
+    }
+
+    private fun hashObjectKey(key: String): String {
+        val md = MessageDigest.getInstance("SHA-256")
+        val bytes = md.digest(key.toByteArray(StandardCharsets.UTF_8))
+        return bytes.joinToString("") { "%02x".format(it) }
     }
 
     @Scheduled(fixedRate = 3600_000)
