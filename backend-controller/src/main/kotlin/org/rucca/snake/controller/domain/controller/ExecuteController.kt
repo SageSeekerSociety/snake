@@ -7,6 +7,7 @@ import java.util.*
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.filter
+import org.apache.catalina.connector.ClientAbortException
 import org.rucca.cheese.auth.AuthenticationService
 import org.rucca.cheese.auth.annotation.Guard
 import org.rucca.snake.controller.domain.model.ApiError
@@ -232,26 +233,32 @@ class ExecuteController(
 
                 // Suspend the main coroutine until its children (heartbeat, collector) are
                 // cancelled.
-                joinAll(heartbeatJob, collectingJob!!)
+                joinAll(heartbeatJob, collectingJob)
+
+                // If we reach here, it means the stream was completed successfully.
+                emitter.complete()
             } catch (e: CancellationException) {
-                // This is the expected path for graceful termination.
                 logger.info(
                     "SSE Stream coroutine for session {} was cancelled: {}",
                     sessionId,
                     e.message,
                 )
             } catch (e: Exception) {
-                // Catch any other unexpected errors during stream setup.
-                logger.error(
-                    "A critical error occurred in the SSE stream for session {}: {}",
-                    sessionId,
-                    e.message,
-                    e,
-                )
-                try {
-                    emitter.completeWithError(e)
-                } catch (t: Throwable) {
-                    logger.warn("Failed to send error to a likely closed SSE stream: {}", t.message)
+                val rootCause = e.cause ?: e
+                if (rootCause is ClientAbortException || rootCause is IOException) {
+                    logger.warn("Client disconnected for session {}: {}", sessionId, e.message)
+                } else {
+                    logger.error("Critical error in SSE stream for session ${sessionId}.", e)
+
+                    try {
+                        emitter.completeWithError(e)
+                    } catch (t: Throwable) {
+                        logger.warn(
+                            "Failed to send final error to SSE stream for session {}, connection likely closed. Details: {}",
+                            sessionId,
+                            t.message,
+                        )
+                    }
                 }
             }
         }
