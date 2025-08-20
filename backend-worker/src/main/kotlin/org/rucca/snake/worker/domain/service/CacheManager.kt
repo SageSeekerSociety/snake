@@ -22,6 +22,8 @@ class CacheManager(
     private val minioService: MinioService,
     private val applicationConfig: ApplicationConfig,
 ) {
+    private val cacheCleanScope =
+        CoroutineScope(Dispatchers.IO + NonCancellable + CoroutineName("CacheCleanupScope"))
     private val logger = LoggerFactory.getLogger(CacheManager::class.java)
     private val cacheBasePath: Path = Paths.get(applicationConfig.cache.basePath)
 
@@ -145,6 +147,29 @@ class CacheManager(
                     }
                 }
 
+                // 4. Update real "Access Time" for TTL mechanism
+                try {
+                    withContext(Dispatchers.IO) {
+                        Files.setAttribute(
+                            localPath,
+                            "basic:lastAccessTime",
+                            FileTime.from(Instant.now()),
+                        )
+                        logger.debug("Updated last access time for cached file: {}", localPath)
+                    }
+                } catch (e: UnsupportedOperationException) {
+                    logger.warn(
+                        "Filesystem does not support updating last access time for '{}'. TTL cleanup might not work as expected.",
+                        localPath,
+                    )
+                } catch (e: Exception) {
+                    logger.warn(
+                        "Failed to update access time on cached file '{}': {}",
+                        localPath,
+                        e.message,
+                    )
+                }
+
                 return localPath
             } catch (e: Exception) {
                 logger.error(
@@ -159,52 +184,57 @@ class CacheManager(
         }
     }
 
-    /**
-     * Invalidates (deletes) the local cache for a specific user. Should be made safe for concurrent
-     * calls if necessary, though typically called sequentially after compilation.
-     *
-     * @param userId The ID of the user whose cache should be invalidated.
-     */
-    suspend fun invalidateCache(userId: Long) {
-        val userCacheDir = cacheBasePath.resolve(userId.toString())
-        // Optional: Use a lock specific to the user directory if concurrent invalidation is
-        // possible and problematic
-        // val lock = objectLocks.computeIfAbsent("invalidate_${userId}") { Mutex() }
-        // lock.withLock { ... }
+    @Scheduled(fixedRate = 3600_000)
+    fun cleanUpExpiredCache() {
+        val ttl = applicationConfig.cache.ttl
+        if (ttl.isZero || ttl.isNegative) {
+            logger.info("Cache TTL is disabled. Skipping cleanup.")
+            return
+        }
 
-        withContext(Dispatchers.IO) {
-            try {
-                if (Files.exists(userCacheDir)) {
-                    Files.walk(userCacheDir)
-                        .sorted(
-                            Comparator.reverseOrder()
-                        ) // Important: delete contents before directory
+        val cutoff = Instant.now().minus(ttl)
+        logger.info(
+            "Running scheduled cache cleanup. Removing files not accessed since: {}",
+            cutoff,
+        )
+
+        try {
+            // 使用 a coroutine for non-blocking IO
+            // 注意：这里没有包含在原始代码里，需要添加 kotlinx-coroutines-core 依赖
+            // GlobalScope is used for simplicity, but a custom scope is better practice.
+            cacheCleanScope.launch {
+                var deletedCount = 0L
+                Files.walk(cacheBasePath).use { paths ->
+                    paths
+                        .filter { Files.isRegularFile(it) }
                         .forEach { path ->
                             try {
-                                Files.deleteIfExists(path)
-                            } catch (e: IOException) {
+                                val attrs =
+                                    Files.readAttributes(path, BasicFileAttributes::class.java)
+                                val lastAccessTime = attrs.lastAccessTime().toInstant()
+
+                                if (lastAccessTime.isBefore(cutoff)) {
+                                    Files.delete(path)
+                                    deletedCount++
+                                    logger.info("Deleted expired cache file: {}", path)
+                                }
+                            } catch (e: Exception) {
                                 logger.warn(
-                                    "Failed to delete path during cache invalidation {}: {}",
+                                    "Failed to process or delete cache file {}: {}",
                                     path,
                                     e.message,
                                 )
                             }
                         }
-                    logger.info(
-                        "Invalidated local cache directory for user {}: {}",
-                        userId,
-                        userCacheDir,
-                    )
                 }
-            } catch (e: Exception) {
-                logger.error(
-                    "Error during cache invalidation for user {}: {}",
-                    userId,
-                    e.message,
-                    e,
-                )
-                // Decide if this error needs further action
+                if (deletedCount > 0) {
+                    logger.info("Cache cleanup finished. Deleted {} expired files.", deletedCount)
+                } else {
+                    logger.info("Cache cleanup finished. No expired files found.")
+                }
             }
+        } catch (e: Exception) {
+            logger.error("Error during cache cleanup task", e)
         }
     }
 
