@@ -1,0 +1,64 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /var/lib/promtail/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push  # 你的 Loki 容器名/地址
+
+scrape_configs:
+  - job_name: docker_sd
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["logging=promtail"]  # 只采集带这个 label 的容器
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        target_label: container
+        regex: '/(.*)'
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: compose_service
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: compose_project
+      - source_labels: ['__meta_docker_container_log_stream']
+        target_label: stream
+      - source_labels: ['__meta_docker_container_log_path']
+        target_label: __path__     # 必须把 log_path relabel 到 __path__
+
+    pipeline_stages:
+      # 1) 先把 Docker 外层 JSON 拆开（把 .log 里的内层日志放到当前行）
+      - docker: {}  # 解析标准 Docker 日志行。:contentReference[oaicite:1]{index=1}
+
+      # 2) 解析“应用内层 JSON”
+      - json:
+          # 不要写 source: log —— 默认就是解析当前行。
+          expressions:
+            ts:         '"@timestamp"'   # 带 @ 的键名必须用引号包起来（JMESPath）
+            level:      level
+            logger:     logger_name
+            thread:     thread_name
+            message:    message
+            trace:      trace_id
+            span:       span_id
+            stack:      stack_trace
+          drop_malformed: true
+
+      # 3) 用应用里的时间戳当 Loki 的时间（可选但推荐）
+      - timestamp:
+          source: ts
+          format: RFC3339Nano           # 你的 @timestamp 看起来是 ISO/RFC3339。:contentReference[oaicite:2]{index=2}
+
+      # 4) 提升关键字段为标签，便于查询
+      - labels:
+          level:
+          logger:
+          trace:
+          span:
+
+      # 5) 让面板里的“Line”显示 message（不是整坨 JSON）
+      - output:
+          source: message               # 将提取的 message 作为最终日志行。:contentReference[oaicite:3]{index=3}

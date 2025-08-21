@@ -1,7 +1,7 @@
 services:
   valkey:
     image: valkey/valkey:latest
-    env_file: ../.env
+    env_file: .env
     ports:
       - "6379:6379"
     volumes:
@@ -17,7 +17,7 @@ services:
   rabbitmq:
     image: rabbitmq:4-management
     hostname: rabbitmq
-    env_file: ../.env
+    env_file: .env
     ports:
       - "5672:5672"
       - "15672:15672"
@@ -32,7 +32,7 @@ services:
   minio:
     image: minio/minio:latest
     hostname: minio
-    env_file: ../.env
+    env_file: .env
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -48,7 +48,7 @@ services:
 
   cheese-auth:
     image: ghcr.io/sageseekersociety/cheese-auth:${CHEESE_AUTH_TAG:-main}
-    env_file: ../.env
+    env_file: .env
     environment:
       - PORT=8080
     volumes:
@@ -71,7 +71,7 @@ services:
 
   cheese-auth-database:
     image: postgres:16.2
-    env_file: ../.env
+    env_file: .env
     volumes:
       - type: volume
         source: cheese_auth_db_pg
