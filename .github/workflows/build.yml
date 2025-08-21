@@ -238,7 +238,7 @@ jobs:
           fi
 
           # Check health of running containers
-          max_tries=10
+          max_tries=20
           tries=0
           until [ $(docker compose ps | grep -c 'healthy') -eq \
               $(docker compose ps -q | wc -l) ] || [ $tries -eq $max_tries ]; do
