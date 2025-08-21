@@ -1,0 +1,19 @@
+<included>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <appender name="CONSOLE_DEV" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>
+                %clr(%d{yyyy-MM-dd HH:mm:ss.SSS}){faint} %clr(%-5level) %clr([%15.15thread]){faint}
+                %clr(%-40.40logger{39}){cyan} %clr(:){faint} %m
+                %nopex%n
+                %clr([trace=%X{trace_id} span=%X{span_id}]){faint}%n
+            </pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE_DEV"/>
+    </root>
+</included>

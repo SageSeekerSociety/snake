@@ -1,5 +1,7 @@
 # Spring Boot 应用基本配置
 spring:
+  profiles:
+    active: dev
   application:
     name: snake.worker
   # --- 数据库配置 ---
