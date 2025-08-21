@@ -1,8 +1,10 @@
 package org.rucca.snake.controller.domain.service
 
+import io.opentelemetry.instrumentation.annotations.WithSpan
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
 import org.rucca.snake.common.domain.model.JobStatus
 import org.rucca.snake.common.infra.persistence.entity.Player
@@ -21,6 +23,7 @@ class PlayerUpdateService(
 
     /** Updates or creates the Player record upon successful code compilation. */
     @Transactional
+    @WithSpan("db.update_player_on_compile")
     suspend fun updatePlayerOnCompileSuccess(
         userId: Int, // Assuming User ID is Int
         jobId: UUID,

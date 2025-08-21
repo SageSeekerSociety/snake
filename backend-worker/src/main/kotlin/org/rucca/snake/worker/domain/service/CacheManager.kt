@@ -1,5 +1,7 @@
 package org.rucca.snake.worker.domain.service
 
+import io.opentelemetry.api.OpenTelemetry
+import io.opentelemetry.instrumentation.annotations.WithSpan
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -12,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.rucca.snake.common.utils.withSuspendingSpan
 import org.rucca.snake.worker.config.ApplicationConfig
 import org.rucca.snake.worker.infra.storage.MinioObjectInfo
 import org.rucca.snake.worker.infra.storage.MinioService
@@ -23,9 +26,12 @@ import org.springframework.stereotype.Service
 class CacheManager(
     private val minioService: MinioService,
     private val applicationConfig: ApplicationConfig,
+    openTelemetry: OpenTelemetry,
 ) {
+    private val tracer = openTelemetry.getTracer(CacheManager::class.java.name)
     private val cacheCleanScope =
         CoroutineScope(Dispatchers.IO + NonCancellable + CoroutineName("CacheCleanupScope"))
+
     private val logger = LoggerFactory.getLogger(CacheManager::class.java)
     private val cacheBasePath: Path = Paths.get(applicationConfig.cache.basePath)
 
@@ -54,6 +60,7 @@ class CacheManager(
      *   "programs/{userId}/program-v1").
      * @return The Path to the locally cached program file, or null if it cannot be obtained.
      */
+    @WithSpan("cache.get_program_path")
     suspend fun getProgramPath(userId: Long, objectKey: String): Path? {
         val userCacheDir = cacheBasePath.resolve(userId.toString())
         val objectKeyHash = hashObjectKey(objectKey)
@@ -118,7 +125,10 @@ class CacheManager(
                     )
                     withContext(Dispatchers.IO) { Files.createDirectories(localPath.parent) }
 
-                    val downloadSuccess = minioService.downloadObject(objectKey, localPath)
+                    val downloadSuccess =
+                        tracer.withSuspendingSpan("cache.download_on_miss") {
+                            minioService.downloadObject(objectKey, localPath)
+                        }
                     if (!downloadSuccess) {
                         logger.error(
                             "Failed to download object '{}' for user {}.",

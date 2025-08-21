@@ -31,6 +31,25 @@ spring:
 
 server:
   port: 8080
+  forward-headers-strategy: native
+
+# --- Actuator 配置 ---
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+
+otel:
+  service:
+    name: ${spring.application.name}
+  exporter:
+    otlp:
+      protocol: grpc
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}
 
 cheese-auth:
   jwt-secret: ${JWT_SECRET:test-secret}

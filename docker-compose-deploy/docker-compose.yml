@@ -80,6 +80,16 @@ services:
   backend-controller:
     image: ${CONTROLLER_IMAGE:-ghcr.io/sageseekersociety/snake-controller:${BACKEND_CONTROLLER_TAG:-main}}
     env_file: .env
+    environment:
+      - OTEL_SERVICE_NAME=snake-controller
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_TRACES_EXPORTER=otlp
+      - OTEL_METRICS_EXPORTER=none
+      - OTEL_PROPAGATORS=tracecontext,baggage
+      - OTEL_TRACES_SAMPLER=parentbased_traceidratio
+      - OTEL_TRACES_SAMPLER_ARG=1.0
+      - SPRING_PROFILES_ACTIVE=prod
+      - MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,prometheus
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -89,6 +99,13 @@ services:
         condition: service_healthy
       cheese-auth-database:
         condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - logging=promtail
     volumes:
       - ./application-controller.yml:/app/config/application.yml:ro
     healthcheck:
@@ -102,6 +119,16 @@ services:
   backend-worker:
     image: ${WORKER_IMAGE:-ghcr.io/sageseekersociety/snake-worker:${BACKEND_WORKER_TAG:-main}}
     env_file: .env
+    environment:
+      - OTEL_SERVICE_NAME=snake-worker
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_TRACES_EXPORTER=otlp
+      - OTEL_METRICS_EXPORTER=none
+      - OTEL_PROPAGATORS=tracecontext,baggage
+      - OTEL_TRACES_SAMPLER=parentbased_traceidratio
+      - OTEL_TRACES_SAMPLER_ARG=1.0
+      - SPRING_PROFILES_ACTIVE=prod
+      - MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,prometheus
     cgroup: host
     depends_on:
       rabbitmq:
@@ -120,6 +147,13 @@ services:
         source: backend_worker_cache
         target: /app/cache
       - ./application-worker.yml:/app/config/application.yml:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - logging=promtail
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health"]
       start_period: 180s
@@ -128,6 +162,87 @@ services:
       timeout: 10s
       retries: 3
     privileged: true
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/ready > /dev/null"]
+      start_period: 30s
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    depends_on:
+      - backend-controller
+      - backend-worker
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana-oss:12.0.4
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana-provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.72.0
+    container_name: jaeger
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.5.3
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki-config.yml:/etc/loki/local-config.yaml
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    healthcheck:
+      test: ["CMD-SHELL","wget -qO- http://localhost:3100/ready | grep -q 'ready'"]
+      start_period: 60s
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:3.5.3
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro   # 读 Docker 日志文件
+      - /var/run/docker.sock:/var/run/docker.sock:ro               # 取容器元数据（可选但强烈建议）
+      - promtail_positions:/var/lib/promtail
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
+    depends_on:
+      loki:
+        condition: service_started
+    restart: unless-stopped
 
   cheese-auth:
     image: ${CHEESE_AUTH_IMAGE:-ghcr.io/sageseekersociety/cheese-auth:${CHEESE_AUTH_TAG:-main}}
@@ -168,8 +283,12 @@ volumes:
   rabbitmq_data:
   minio_data:
   valkey_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:
   backend_worker_data:
   backend_worker_cache:
   cheese_auth_uploads:
   cheese_auth_db_pg:
   frontend_dist:
+  promtail_positions:

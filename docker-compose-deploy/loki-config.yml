@@ -1,0 +1,34 @@
+# loki-config.yml —— 单机 + 本地磁盘（TSDB + filesystem）
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  # 可省略 grpc 端口，使用默认 9096。若一定要显式配置：
+  # grpc_listen_port: 9096
+
+common:
+  path_prefix: /loki
+  replication_factor: 1
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb                # 3.x 推荐
+      object_store: filesystem   # 使用本地目录存 chunk
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+storage_config:
+  # TSDB 索引的本地活跃目录和缓存目录（必须有）
+  tsdb_shipper:
+    active_index_directory: /loki/index
+    cache_location: /loki/index_cache
+  # chunk 数据实际落地目录
+  filesystem:
+    directory: /loki/chunks

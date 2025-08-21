@@ -1,5 +1,14 @@
 package org.rucca.snake.worker.infra.amqp
 
+import io.opentelemetry.api.OpenTelemetry
+import io.opentelemetry.api.common.AttributeKey
+import io.opentelemetry.api.trace.Span
+import io.opentelemetry.api.trace.SpanKind
+import io.opentelemetry.api.trace.StatusCode
+import io.opentelemetry.context.Context
+import io.opentelemetry.context.Scope
+import io.opentelemetry.context.propagation.TextMapGetter
+import io.opentelemetry.extension.kotlin.asContextElement
 import java.util.concurrent.CompletableFuture
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.future.future
@@ -12,87 +21,100 @@ import org.springframework.stereotype.Service
 @Service
 class TaskListenerService(
     private val taskProcessor: TaskProcessor,
-    @Qualifier("applicationCoroutineScope")
-    private val applicationScope: CoroutineScope, // Injected CoroutineScope
+    @Qualifier("applicationCoroutineScope") private val applicationScope: CoroutineScope,
+    openTelemetry: OpenTelemetry,
 ) {
-
     private val logger = LoggerFactory.getLogger(TaskListenerService::class.java)
 
-    @RabbitListener(
-        queues = ["\${amqp.queue.compile}"], // Reference queue name from properties
-        containerFactory = "rabbitListenerContainerFactory", // Specify the custom factory
-    )
-    fun receiveCompileTask(
-        message: Message
-    ): CompletableFuture<Void?> { // 返回类型变更为 CompletableFuture<Void?>
-        val jobId =
-            message.messageProperties.correlationId
-                ?: "[unknown_jobId-${'$'}{message.messageProperties.deliveryTag}]"
+    private val tracer = openTelemetry.getTracer(TaskListenerService::class.java.name)
+    private val propagator = openTelemetry.propagators.textMapPropagator
+
+    private object AmqpGetter : TextMapGetter<Message> {
+        override fun keys(carrier: Message): Iterable<String> =
+            carrier.messageProperties.headers.keys
+
+        override fun get(carrier: Message?, key: String): String? {
+            val v = carrier?.messageProperties?.headers?.get(key) ?: return null
+            return when (v) {
+                is ByteArray -> String(v)
+                else -> v.toString()
+            }
+        }
+    }
+
+    private fun handleMessage(message: Message, operation: String): CompletableFuture<Void?> {
+        val props = message.messageProperties
+        val jobId = props.correlationId ?: "[unknown_jobId-${props.deliveryTag}]"
+
+        val extracted: Context = propagator.extract(Context.current(), message, AmqpGetter)
+
+        val extractedSpanContext = Span.fromContext(extracted).spanContext
         logger.info(
-            "Received compile task via listener for jobId: {} (deliveryTag: {}) from queue: {}",
-            jobId,
-            message.messageProperties.deliveryTag,
-            message.messageProperties.consumerQueue,
+            "Worker extracted trace: traceId={}, spanId={}, isRemote={}, queue={}",
+            extractedSpanContext.traceId,
+            extractedSpanContext.spanId,
+            extractedSpanContext.isRemote,
+            props.consumerQueue,
         )
 
-        return applicationScope.future { // 使用 future 协程构建器
-            try {
-                taskProcessor.processMessage(message) // 调用挂起函数
-                logger.info("Successfully processed compile task for jobId: {}", jobId)
-            } catch (e: Exception) {
-                // The retry interceptor in the container factory will handle retries based on the
-                // future failing.
-                // If retries are exhausted, the message will be rejected (and sent to DLQ if
-                // configured).
-                logger.error(
-                    "Error processing compile task for jobId: {} from queue: {}. Error: {}",
-                    jobId,
-                    message.messageProperties.consumerQueue,
-                    e.message,
-                    e, // Log the full exception
+        val consumerSpan =
+            tracer
+                .spanBuilder("$operation.receive")
+                .setSpanKind(SpanKind.CONSUMER)
+                .setParent(extracted)
+                .setAttribute(AttributeKey.stringKey("messaging.system"), "rabbitmq")
+                .setAttribute(
+                    AttributeKey.stringKey("messaging.destination.name"),
+                    props.consumerQueue ?: "",
                 )
-                // IMPORTANT: Re-throw the exception to make the CompletableFuture complete
-                // exceptionally.
-                // Spring AMQP will then handle it for retry/DLQ.
-                throw e
+                .setAttribute(AttributeKey.stringKey("messaging.operation"), "process")
+                .setAttribute(
+                    AttributeKey.stringKey("messaging.rabbitmq.delivery_tag"),
+                    props.deliveryTag.toString(),
+                )
+                .setAttribute(AttributeKey.stringKey("app.job_id"), jobId)
+                .startSpan()
+
+        val ctxWithConsumer = extracted.with(consumerSpan)
+
+        return applicationScope.future(ctxWithConsumer.asContextElement()) {
+            ctxWithConsumer.makeCurrent().use { _: Scope ->
+                try {
+                    taskProcessor.processMessage(message)
+
+                    consumerSpan.setStatus(StatusCode.OK)
+                    logger.info("Successfully processed {} task for jobId={}", operation, jobId)
+                } catch (e: Exception) {
+                    consumerSpan.recordException(e)
+                    consumerSpan.setStatus(StatusCode.ERROR, e.message ?: "error")
+                    logger.error(
+                        "Error processing {} task for jobId={} from queue={}. Error={}",
+                        operation,
+                        jobId,
+                        props.consumerQueue,
+                        e.message,
+                        e,
+                    )
+                    throw e
+                } finally {
+                    consumerSpan.end()
+                }
             }
-            null // CompletableFuture<Void?> 成功时返回 null
+            null
         }
     }
 
     @RabbitListener(
-        queues = ["\${amqp.queue.execute}"], // Reference queue name from properties
-        containerFactory = "rabbitListenerContainerFactory", // Specify the custom factory
+        queues = ["\${amqp.queue.compile}"],
+        containerFactory = "rabbitListenerContainerFactory",
     )
-    fun receiveExecuteTask(
-        message: Message
-    ): CompletableFuture<Void?> { // 返回类型变更为 CompletableFuture<Void?>
-        val jobId =
-            message.messageProperties.correlationId
-                ?: "[unknown_jobId-${'$'}{message.messageProperties.deliveryTag}]"
-        logger.info(
-            "Received execute task via listener for jobId: {} (deliveryTag: {}) from queue: {}",
-            jobId,
-            message.messageProperties.deliveryTag,
-            message.messageProperties.consumerQueue,
-        )
+    fun receiveCompileTask(message: Message): CompletableFuture<Void?> =
+        handleMessage(message, "compile")
 
-        return applicationScope.future { // 使用 future 协程构建器
-            try {
-                taskProcessor.processMessage(message) // 调用挂起函数
-                logger.info("Successfully processed execute task for jobId: {}", jobId)
-            } catch (e: Exception) {
-                logger.error(
-                    "Error processing execute task for jobId: {} from queue: {}. Error: {}",
-                    jobId,
-                    message.messageProperties.consumerQueue,
-                    e.message,
-                    e, // Log the full exception
-                )
-                // Re-throw for DLQ processing by the container via CompletableFuture failure
-                throw e
-            }
-            null // CompletableFuture<Void?> 成功时返回 null
-        }
-    }
+    @RabbitListener(
+        queues = ["\${amqp.queue.execute}"],
+        containerFactory = "rabbitListenerContainerFactory",
+    )
+    fun receiveExecuteTask(message: Message): CompletableFuture<Void?> =
+        handleMessage(message, "execute")
 }

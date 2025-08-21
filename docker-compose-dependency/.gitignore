@@ -1,2 +1,4 @@
 .env
 plugins/
+application-controller.yml
+application-worker.yml

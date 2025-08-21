@@ -53,6 +53,7 @@
         <jakarta-annotation-api.version>3.0.0</jakarta-annotation-api.version>
         <jakarta-validation-api.version>3.1.1</jakarta-validation-api.version>
         <jakarta-servlet-api.version>6.1.0</jakarta-servlet-api.version>
+        <opentelemetry-instrumentation.version>2.19.0</opentelemetry-instrumentation.version>
     </properties>
 
     <!-- 统一依赖管理 (子模块按需引用，无需指定版本) -->
@@ -64,6 +65,14 @@
                 <artifactId>snake.common</artifactId>
                 <version>${project.version}</version>
                 <!-- 使用父项目版本 -->
+            </dependency>
+
+            <dependency>
+                <groupId>io.opentelemetry.instrumentation</groupId>
+                <artifactId>opentelemetry-instrumentation-bom</artifactId>
+                <version>${opentelemetry-instrumentation.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
             </dependency>
 
             <!-- 数据库相关 -->

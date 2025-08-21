@@ -27,6 +27,18 @@
             <artifactId>kotlin-reflect</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>org.jetbrains.kotlinx</groupId>
+            <artifactId>kotlinx-coroutines-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlinx</groupId>
+            <artifactId>kotlinx-coroutines-jdk8</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-extension-kotlin</artifactId>
+        </dependency>
         <!-- 如果共享实体类，需要 JPA API 和 Hibernate Utils (如果用了里面的类型) -->
         <dependency>
             <groupId>org.springframework.data</groupId>
@@ -75,6 +87,10 @@
             <!-- 如果常量或工具类需要日志 -->
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
         </dependency>
 
     </dependencies>

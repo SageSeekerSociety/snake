@@ -1,0 +1,14 @@
+# prometheus.yml
+global:
+  scrape_interval: 15s # 每 15 秒抓取一次指标
+
+scrape_configs:
+  - job_name: 'backend-controller'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['backend-controller:8080']
+
+  - job_name: 'backend-worker'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['backend-worker:8080']

@@ -1,0 +1,306 @@
+services:
+  backend-worker:
+    image: my-local-snake-worker:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile.worker
+      args:
+        NSJAIL_REPO: https://github.com/SageSeekerSociety/nsjail.git
+        NSJAIL_BRANCH: master
+    environment:
+      - OTEL_SERVICE_NAME=snake-worker
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_TRACES_EXPORTER=otlp
+      - OTEL_METRICS_EXPORTER=none
+      - OTEL_PROPAGATORS=tracecontext,baggage
+      - OTEL_TRACES_SAMPLER=parentbased_traceidratio
+      - OTEL_TRACES_SAMPLER_ARG=1.0
+      - SPRING_PROFILES_ACTIVE=prod
+      - MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,prometheus
+    env_file: .env
+    cgroup: host
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      cheese-auth-database:
+        condition: service_healthy
+      backend-controller:
+        condition: service_healthy
+    volumes:
+      - type: volume
+        source: backend_worker_data
+        target: /app/data
+      - type: volume
+        source: backend_worker_cache
+        target: /app/cache
+      - ./application-worker.yml:/app/config/application.yml:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - logging=promtail
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health"]
+      start_period: 180s
+      start_interval: 5s
+      interval: 1m
+      timeout: 10s
+      retries: 3
+    privileged: true
+
+  backend-controller:
+    image: my-local-snake-controller:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile.controller
+    env_file: .env
+    environment:
+      - OTEL_SERVICE_NAME=snake-controller
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_TRACES_EXPORTER=otlp
+      - OTEL_METRICS_EXPORTER=none
+      - OTEL_PROPAGATORS=tracecontext,baggage
+      - OTEL_TRACES_SAMPLER=parentbased_traceidratio
+      - OTEL_TRACES_SAMPLER_ARG=1.0
+      - SPRING_PROFILES_ACTIVE=prod
+      - MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,prometheus
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      cheese-auth-database:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - logging=promtail
+    volumes:
+      - type: volume
+        source: backend_controller_data
+        target: /app/data
+      - ./application-controller.yml:/app/config/application.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health"]
+      start_period: 180s
+      start_interval: 5s
+      interval: 1m
+      timeout: 10s
+      retries: 3
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    hostname: rabbitmq
+    env_file: .env
+    ports:
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  nginx:
+    image: nginx:latest
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+      - frontend_dist:/usr/share/nginx/html:ro
+    ports:
+      - ${FINAL_PORT}:80
+    depends_on:
+      backend-controller:
+        condition: service_healthy
+      cheese-auth:
+        condition: service_healthy
+      frontend:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -f http://localhost/ && curl -f http://localhost/api/cheese-auth/status && curl -f http://localhost/api/sandbox/actuator/health",
+        ]
+      start_period: 180s
+      start_interval: 5s
+      interval: 1m
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-ghcr.io/sageseekersociety/snake-frontend:${FRONTEND_TAG:-main}}
+    env_file: .env
+    command: sh -c 'cp -r /usr/share/nginx/html/. /mnt/dist/ && echo "Frontend files copied successfully."'
+    volumes:
+      - frontend_dist:/mnt/dist/
+
+  minio:
+    image: minio/minio:latest
+    hostname: minio
+    env_file: .env
+    ports:
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  cheese-auth:
+    image: ghcr.io/sageseekersociety/cheese-auth:${CHEESE_AUTH_TAG:-main}
+    env_file: .env
+    environment:
+      - PORT=8080
+    volumes:
+      - type: volume
+        source: cheese_auth_uploads
+        target: /app/uploads
+      - ./plugins:/app/server/plugins
+    depends_on:
+      cheese-auth-database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/status || exit 1"]
+      start_period: 180s
+      start_interval: 5s
+      interval: 1m
+      timeout: 10s
+      retries: 3
+
+  cheese-auth-database:
+    image: postgres:16.2
+    env_file: .env
+    volumes:
+      - type: volume
+        source: cheese_auth_db_pg
+        target: /var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      start_period: 180s
+      start_interval: 5s
+      interval: 1m
+      timeout: 10s
+      retries: 3
+
+  # Valkey is a Redis-compatible key-value store
+  valkey:
+    image: valkey/valkey:8.0.2
+    volumes:
+      - type: volume
+        source: valkey_data
+        target: /data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - "9091:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/ready > /dev/null"]
+      start_period: 30s
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    depends_on:
+      - backend-controller
+      - backend-worker
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana-oss:12.0.4
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana-provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.72.0
+    container_name: jaeger
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.5.3
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki-config.yml:/etc/loki/local-config.yaml
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    healthcheck:
+      test: ["CMD-SHELL","wget -qO- http://127.0.0.1:3100/ready | grep -q 'ready'"]
+      start_period: 60s
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:3.5.3
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro   # 读 Docker 日志文件
+      - /var/run/docker.sock:/var/run/docker.sock:ro               # 取容器元数据（可选但强烈建议）
+      - promtail_positions:/var/lib/promtail
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
+    depends_on:
+      loki:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  rabbitmq_data:
+  minio_data:
+  valkey_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+  backend_worker_data:
+  backend_controller_data:
+  backend_worker_cache:
+  cheese_auth_uploads:
+  cheese_auth_db_pg:
+  frontend_dist:
+  promtail_positions:

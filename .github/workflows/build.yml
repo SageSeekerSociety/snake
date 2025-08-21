@@ -187,73 +187,74 @@ jobs:
       - name: Start compose
         working-directory: docker-compose-deploy
         run: |
+          # Set safer shell options for robustness
+          set -euo pipefail
+
+          # Configurable health check parameters
+          MAX_HEALTHCHECK_TRIES=20
+          HEALTHCHECK_SLEEP_SECS=5
+
           # Start services in background
-          docker compose --file docker-compose.yml up --no-build --detach || true
+          docker compose --file docker-compose.yml up --no-build --detach
 
           echo "=== Current Container Status (including exited containers) ==="
           docker compose ps -a
 
-          # Check if any containers failed to start or exited
-          failed_containers=$(docker compose ps -a | grep -E "unhealthy" | awk '{print $1}')
+          # Wait for services to stabilize and check their health
+          tries=0
+          all_healthy=false
 
-          if [ -n "$failed_containers" ]; then
-            echo "=== CRITICAL ERROR: The following containers failed to start ==="
-            echo "$failed_containers"
+          until [ "$all_healthy" = true ] || [ $tries -eq $MAX_HEALTHCHECK_TRIES ]; do
+            tries=$((tries+1))
+            echo "Waiting for services to become healthy... (try ${tries}/${MAX_HEALTHCHECK_TRIES})"
+            docker compose ps -a
 
-            echo "=== Environment Variables ==="
-            docker compose config | grep -v -E '^\s*(password|secret|key)'
-
-            echo "=== Failed Container Details ==="
-            for container in $failed_containers; do
-              echo "===== Failed Container: $container ====="
-              docker inspect $container | grep -E 'State|ExitCode|Error|Cmd|Args|Env'
-              echo ""
-              echo "===== Logs for $container ====="
-              docker logs $container 2>&1 || echo "Could not get logs for $container"
-            done
-
-            # Check controller specifically since that's what's failing
-            controller_container=$(echo "$failed_containers" | grep "controller")
-            if [ -n "$controller_container" ]; then
-              echo "===== Controller Container Environment Variables ====="
-              docker inspect $controller_container -f '{{range .Config.Env}}{{println .}}{{end}}'
-
-              echo "===== Controller Container Command ====="
-              docker inspect $controller_container -f '{{.Config.Cmd}}'
-
-              echo "===== Controller Container Entry Point ====="
-              docker inspect $controller_container -f '{{.Config.Entrypoint}}'
+            # Check for unexpectedly exited containers (ignore frontend)
+            exited_services=$(docker compose ps -a | grep 'Exited' | grep -v 'frontend' | awk '{print $1}' || true)
+            if [ -n "$exited_services" ]; then
+                echo "=== ERROR: Services have unexpectedly exited: $exited_services ==="
+                for service in $exited_services; do
+                  echo "===== Logs for exited service: $service ====="
+                  docker logs "$service" || echo "Could not get logs for $service"
+                done
+                exit 1
             fi
 
-            # Still output logs for any running containers
-            echo "=== Running Service Logs ==="
-            running_containers=$(docker compose ps -q)
-            for container in $running_containers; do
-              container_name=$(docker inspect --format='{{.Name}}' $container | sed 's/\///')
-              echo "===== Logs for running container $container_name ====="
-              docker logs $container 2>&1 || echo "Could not get logs for $container_name"
-            done
+            # Count services that have a health status indicator
+            services_with_healthcheck=$(docker compose ps -a | grep -c -E '\(healthy\)|\(unhealthy\)|\(health: starting\)' || true)
+            healthy_services=$(docker compose ps -a | grep -c '(healthy)' || true)
 
-            exit 1
-          fi
+            echo "Found $healthy_services healthy services out of $services_with_healthcheck services with health checks."
 
-          # Check health of running containers
-          max_tries=10
-          tries=0
-          until [ $(docker compose ps | grep -c 'healthy') -eq \
-              $(docker compose ps -q | wc -l) ] || [ $tries -eq $max_tries ]; do
-            echo "Waiting for all services to become healthy... (try $((tries+1))/$max_tries)"
-            docker compose ps
-            sleep 5
-            tries=$((tries+1))
+            # Warn about unhealthy services but allow retries
+            unhealthy_services=$(docker compose ps -a | grep '(unhealthy)' | awk '{print $1}' || true)
+            if [ -n "$unhealthy_services" ]; then
+              echo "WARNING: The following services are unhealthy, will retry: $unhealthy_services"
+            fi
+
+            # Success condition: at least one service has a health check, and all of them are healthy
+            if [ "$services_with_healthcheck" -gt 0 ] && [ "$healthy_services" -eq "$services_with_healthcheck" ]; then
+              all_healthy=true
+            elif [ $tries -lt $MAX_HEALTHCHECK_TRIES ]; then
+              sleep $HEALTHCHECK_SLEEP_SECS
+            fi
           done
 
-          if [ $tries -eq $max_tries ]; then
-            echo "=== ERROR: Services did not become healthy after $max_tries tries ==="
-
-            # Add all previous diagnostic code here...
-            # [previous diagnostic code]
-
+          if [ "$all_healthy" = false ]; then
+            echo "=== ERROR: Services did not become healthy after $MAX_HEALTHCHECK_TRIES tries ==="
+            docker compose ps -a
+            
+            # Get all services that are not healthy or are not the frontend service that is expected to exit
+            failing_services=$(docker compose ps -a | grep -v -E '\(healthy\)|frontend.*Exited' | awk 'NR>1 {print $1}')
+            
+            if [ -n "$failing_services" ]; then
+              echo "=== Logs for failing or unhealthy services ==="
+              for service in $failing_services; do
+                echo "===== Logs for service: $service ====="
+                docker logs "$service" || echo "Could not get logs for $service"
+              done
+            fi
+            
             exit 1
           fi
 

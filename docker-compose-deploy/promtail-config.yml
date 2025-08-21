@@ -1,0 +1,80 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /var/lib/promtail/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push  # 你的 Loki 容器名/地址
+
+scrape_configs:
+  - job_name: docker_sd
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["logging=promtail"]  # 只采集带这个 label 的容器
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        target_label: container
+        regex: '/(.*)'
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: compose_service
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: compose_project
+      - source_labels: ['__meta_docker_container_log_stream']
+        target_label: stream
+      - source_labels: ['__meta_docker_container_log_path']
+        target_label: __path__     # 必须把 log_path relabel 到 __path__
+
+    pipeline_stages:
+      # 1) 解析 Docker 的外层 JSON
+      - docker: {}
+
+      # 2) 合并多行日志（如 Java 堆栈跟踪）
+      #    新日志行以时间戳或 '{' (JSON) 开头
+      - multiline:
+          firstline: '^\d{4}-\d{2}-\d{2}|^{'
+          max_wait_time: 3s
+
+      # 3) 优先尝试按 JSON 解析
+      - json:
+          expressions:
+            ts: '"@timestamp"'
+            level: level
+            logger: logger_name
+            message: message
+            trace: trace_id
+            span: span_id
+          # 如果不是 JSON，不丢弃，日志将保持原样进入下一阶段
+          drop_malformed: false
+
+      # 4) 如果 JSON 解析失败，则回退到用 正则表达式(Regex) 解析
+      #    这个 Regex 只会在 "message" 字段不存在时生效
+      - regex:
+          expression: '^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\s+(?P<level>\w+)\s+.*?\s+:\s(?P<message>.*)$'
+
+      # 5) 统一处理时间戳
+      #    如果 ts 字段存在（来自JSON或Regex），则用它作为Loki时间戳
+      - timestamp:
+          source: ts
+          formats:
+            - RFC3339Nano
+            - "2006-01-02 15:04:05.999"
+          action_on_failure: skip # 如果没有可用的 ts，则跳过
+
+      # 6) 统一提升关键字段为标签
+      - labels:
+          level:
+          logger:
+      - template:
+          # Ensure a final message exists and preserve trace/span as inline fields
+          source: message
+          template: '{{ .message | default .log }}{{ if .trace }} trace_id={{ .trace }}{{ end }}{{ if .span }} span_id={{ .span }}{{ end }}'
+
+      # 7) 统一输出格式
+      #    使用 message 字段作为最终的日志行
+      - output:
+          source: message
