@@ -3,32 +3,36 @@ package org.rucca.snake.worker.domain.service
 import io.opentelemetry.api.OpenTelemetry
 import io.opentelemetry.instrumentation.annotations.WithSpan
 import java.io.IOException
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.FileTime
+import java.security.MessageDigest
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
-import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import org.rucca.snake.worker.config.ApplicationConfig
 import org.rucca.snake.worker.infra.storage.MinioObjectInfo
 import org.rucca.snake.worker.infra.storage.MinioService
 import org.rucca.snake.worker.utils.withSuspendingSpan
 import org.slf4j.LoggerFactory
+import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Service
 
 @Service
 class CacheManager(
     private val minioService: MinioService,
-    applicationConfig: ApplicationConfig,
+    private val applicationConfig: ApplicationConfig,
     openTelemetry: OpenTelemetry,
 ) {
     private val tracer = openTelemetry.getTracer(CacheManager::class.java.name)
+    private val cacheCleanScope =
+        CoroutineScope(Dispatchers.IO + NonCancellable + CoroutineName("CacheCleanupScope"))
+
     private val logger = LoggerFactory.getLogger(CacheManager::class.java)
     private val cacheBasePath: Path = Paths.get(applicationConfig.cache.basePath)
 
@@ -42,12 +46,7 @@ class CacheManager(
             Files.createDirectories(cacheBasePath)
             logger.info("Local cache directory initialized at: {}", cacheBasePath.toAbsolutePath())
         } catch (e: Exception) {
-            logger.error(
-                "Failed to create cache base directory at {}: {}",
-                cacheBasePath,
-                e.message,
-                e,
-            )
+            logger.error("Failed to create cache base directory at $cacheBasePath", e)
             throw IllegalStateException("Failed to initialize cache directory", e)
         }
     }
@@ -64,24 +63,16 @@ class CacheManager(
      */
     @WithSpan("cache.get_program_path")
     suspend fun getProgramPath(userId: Long, objectKey: String): Path? {
-        // Construct local cache path based on objectKey structure or userId
-        // Using a structure reflecting the object key might be better if keys include versions
-        // Example: If objectKey is "programs/123/program-v2", cache path could be
-        // cache/programs/123/program-v2
-        // For simplicity, let's stick to userId/program for now, assuming objectKey format
-        // consistency
         val userCacheDir = cacheBasePath.resolve(userId.toString())
-        val localPath = userCacheDir.resolve("program") // Assuming a standard name in cache
+        val objectKeyHash = hashObjectKey(objectKey)
+        val localPath =
+            userCacheDir.resolve(objectKeyHash).resolve(Paths.get(objectKey).fileName.toString())
 
-        // Get or create a Mutex for this specific object key to handle concurrency
         val lock = objectLocks.computeIfAbsent(objectKey) { Mutex() }
 
-        // Acquire the lock for this object key. Only one coroutine can proceed at a time for the
-        // same key.
         lock.withLock {
             try {
-                // 1. Get latest metadata from MinIO (this tells us if the object exists and its
-                // last modified time)
+                // 1. Get latest metadata from MinIO
                 val remoteInfo: MinioObjectInfo? = minioService.statObject(objectKey)
                 if (remoteInfo == null) {
                     logger.warn(
@@ -89,7 +80,6 @@ class CacheManager(
                         objectKey,
                         userId,
                     )
-                    // Ensure local cache (if exists from a previous version) is removed
                     withContext(Dispatchers.IO) { Files.deleteIfExists(localPath) }
                     return null
                 }
@@ -103,7 +93,6 @@ class CacheManager(
                         }
                     val remoteLastModified: Instant? = remoteInfo.lastModified?.toInstant()
 
-                    // Compare LastModified times for validation
                     if (remoteLastModified != null && localLastModified == remoteLastModified) {
                         logger.debug(
                             "Cache hit and validated via LastModified for object '{}', user {}.",
@@ -113,15 +102,12 @@ class CacheManager(
                         needsDownload = false
                     } else {
                         logger.info(
-                            "Local cache for object '{}' exists but is outdated or remote time unavailable. Needs download.",
+                            "Local cache for object '{}' exists but is outdated or remote time unavailable. Needs download. Local: {}, Remote: {}",
                             objectKey,
+                            localLastModified,
+                            remoteLastModified,
                         )
-                        // Optionally log details: Local: $localLastModified, Remote:
-                        // $remoteLastModified
                     }
-                    // Consider adding ETag comparison here if needed for stronger validation
-                    // Requires storing the ETag locally alongside the file, e.g., in a ".etag"
-                    // file.
                 } else {
                     logger.info(
                         "Local cache miss for object '{}', user {}. Needs download.",
@@ -138,7 +124,6 @@ class CacheManager(
                         userId,
                         localPath,
                     )
-                    // Ensure parent directory exists within the locked section
                     withContext(Dispatchers.IO) { Files.createDirectories(localPath.parent) }
 
                     val downloadSuccess = tracer.withSuspendingSpan("cache.download_on_miss") { minioService.downloadObject(objectKey, localPath) }
@@ -148,11 +133,9 @@ class CacheManager(
                             objectKey,
                             userId,
                         )
-                        return null // Download failed
+                        return null
                     }
 
-                    // After successful download, set the local file's last modified time
-                    // to match the remote object's time for future validation.
                     remoteInfo.lastModified?.let { remoteModTime ->
                         try {
                             withContext(Dispatchers.IO) {
@@ -172,25 +155,26 @@ class CacheManager(
                                 localPath,
                                 e.message,
                             )
-                            // This is not fatal, but might cause unnecessary re-downloads later
                         }
                     }
-                    // Optional: Store ETag if using ETag validation
-                    // remoteInfo.etag?.let { writeLocalEtag(localPath, it) }
                 }
 
-                // 4. Update "Access Time" for TTL mechanism (using Last Modified as proxy)
-                // Since the TTL cleanup task checks Last Modified, we update it here on access.
+                // 4. Update real "Access Time" for TTL mechanism
                 try {
                     withContext(Dispatchers.IO) {
-                        Files.setLastModifiedTime(localPath, FileTime.from(Instant.now()))
-                        logger.debug(
-                            "Updated effective access time (via LastModified) for cached file: {}",
+                        Files.setAttribute(
                             localPath,
+                            "basic:lastAccessTime",
+                            FileTime.from(Instant.now()),
                         )
+                        logger.debug("Updated last access time for cached file: {}", localPath)
                     }
+                } catch (e: UnsupportedOperationException) {
+                    logger.warn(
+                        "Filesystem does not support updating last access time for '{}'. TTL cleanup might not work as expected.",
+                        localPath,
+                    )
                 } catch (e: Exception) {
-                    // Log warning but don't fail if access time update fails
                     logger.warn(
                         "Failed to update access time on cached file '{}': {}",
                         localPath,
@@ -198,73 +182,77 @@ class CacheManager(
                     )
                 }
 
-                return localPath // Return the path to the valid local file
+                return localPath
             } catch (e: Exception) {
-                // Catch exceptions during the locked operation
                 logger.error(
-                    "Exception in CacheManager.getProgramPath for object '{}', user {}: {}",
-                    objectKey,
-                    userId,
-                    e.message,
+                    "Exception in CacheManager.getProgramPath for object '$objectKey', user $userId",
                     e,
                 )
-                // Clean up potentially inconsistent local state if an error occurred during
-                // download/update
                 try {
                     withContext(Dispatchers.IO + NonCancellable) { Files.deleteIfExists(localPath) }
                 } catch (_: Exception) {}
                 return null
             }
-            // The lock is automatically released when exiting the withLock block
         }
     }
 
-    /**
-     * Invalidates (deletes) the local cache for a specific user. Should be made safe for concurrent
-     * calls if necessary, though typically called sequentially after compilation.
-     *
-     * @param userId The ID of the user whose cache should be invalidated.
-     */
-    suspend fun invalidateCache(userId: Long) {
-        val userCacheDir = cacheBasePath.resolve(userId.toString())
-        // Optional: Use a lock specific to the user directory if concurrent invalidation is
-        // possible and problematic
-        // val lock = objectLocks.computeIfAbsent("invalidate_${userId}") { Mutex() }
-        // lock.withLock { ... }
+    private fun hashObjectKey(key: String): String {
+        val md = MessageDigest.getInstance("SHA-256")
+        val bytes = md.digest(key.toByteArray(StandardCharsets.UTF_8))
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
 
-        withContext(Dispatchers.IO) {
-            try {
-                if (Files.exists(userCacheDir)) {
-                    Files.walk(userCacheDir)
-                        .sorted(
-                            Comparator.reverseOrder()
-                        ) // Important: delete contents before directory
+    @Scheduled(fixedRate = 3600_000)
+    fun cleanUpExpiredCache() {
+        val ttl = applicationConfig.cache.ttl
+        if (ttl.isZero || ttl.isNegative) {
+            logger.info("Cache TTL is disabled. Skipping cleanup.")
+            return
+        }
+
+        val cutoff = Instant.now().minus(ttl)
+        logger.info(
+            "Running scheduled cache cleanup. Removing files not accessed since: {}",
+            cutoff,
+        )
+
+        try {
+            // 使用 a coroutine for non-blocking IO
+            // 注意：这里没有包含在原始代码里，需要添加 kotlinx-coroutines-core 依赖
+            // GlobalScope is used for simplicity, but a custom scope is better practice.
+            cacheCleanScope.launch {
+                var deletedCount = 0L
+                Files.walk(cacheBasePath).use { paths ->
+                    paths
+                        .filter { Files.isRegularFile(it) }
                         .forEach { path ->
                             try {
-                                Files.deleteIfExists(path)
-                            } catch (e: IOException) {
+                                val attrs =
+                                    Files.readAttributes(path, BasicFileAttributes::class.java)
+                                val lastAccessTime = attrs.lastAccessTime().toInstant()
+
+                                if (lastAccessTime.isBefore(cutoff)) {
+                                    Files.delete(path)
+                                    deletedCount++
+                                    logger.info("Deleted expired cache file: {}", path)
+                                }
+                            } catch (e: Exception) {
                                 logger.warn(
-                                    "Failed to delete path during cache invalidation {}: {}",
+                                    "Failed to process or delete cache file {}: {}",
                                     path,
                                     e.message,
                                 )
                             }
                         }
-                    logger.info(
-                        "Invalidated local cache directory for user {}: {}",
-                        userId,
-                        userCacheDir,
-                    )
                 }
-            } catch (e: Exception) {
-                logger.error(
-                    "Error during cache invalidation for user {}: {}",
-                    userId,
-                    e.message,
-                    e,
-                )
-                // Decide if this error needs further action
+                if (deletedCount > 0) {
+                    logger.info("Cache cleanup finished. Deleted {} expired files.", deletedCount)
+                } else {
+                    logger.info("Cache cleanup finished. No expired files found.")
+                }
             }
+        } catch (e: Exception) {
+            logger.error("Error during cache cleanup task", e)
         }
     }
 
