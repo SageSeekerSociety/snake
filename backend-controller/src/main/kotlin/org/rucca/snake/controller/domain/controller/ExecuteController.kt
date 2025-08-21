@@ -179,77 +179,80 @@ class ExecuteController(
                     .startSpan()
 
             try {
-                // Launch a heartbeat coroutine to keep the connection alive through proxies.
-                val heartbeatJob = launch {
-                    while (isActive) {
-                        delay(25.seconds)
-                        emitter.send(SseEmitter.event().comment("heartbeat"))
+                streamSpan.makeCurrent().use {
+                    // Launch a heartbeat coroutine to keep the connection alive through proxies.
+                    val heartbeatJob = launch {
+                        while (isActive) {
+                            delay(25.seconds)
+                            emitter.send(SseEmitter.event().comment("heartbeat"))
+                        }
                     }
-                }
 
-                // Launch the primary job to collect and send events.
-                collectingJob =
-                    launch(Dispatchers.IO + CoroutineName("SseSessionCollector-$sessionId")) {
-                        // 1. Get the single, session-level flow. This will emit events for all
-                        //    jobs associated with this session, both past and future.
-                        val sessionFlow = jobFlowService.getSessionFlow(sessionIdAsUUID)
+                    // Launch the primary job to collect and send events.
+                    collectingJob =
+                        launch(Dispatchers.IO + CoroutineName("SseSessionCollector-$sessionId")) {
+                            // 1. Get the single, session-level flow. This will emit events for all
+                            //    jobs associated with this session, both past and future.
+                            val sessionFlow = jobFlowService.getSessionFlow(sessionIdAsUUID)
 
-                        // 2. Filter the stream based on the 'fromTick' parameter and collect
-                        // events.
-                        sessionFlow
-                            .filter { event ->
-                                val eventData = event.data as? Map<*, *>
-                                val eventTick = eventData?.get("tickNumber") as? Number
-                                // Pass through events without a tick (e.g., global errors) or
-                                // events >= fromTick.
-                                eventTick == null || eventTick.toLong() >= fromTick
-                            }
-                            .collect { event ->
-                                try {
-                                    // 3. Filter sensitive data before sending.
-                                    val originalEventData =
-                                        event.data as? Map<*, *> ?: emptyMap<Any, Any>()
-                                    val clientEventData = originalEventData.toMutableMap()
-
-                                    val eventAiUserId =
-                                        clientEventData["userId"]
-                                            as? Long // Assuming key is 'userId' in final DTO
-                                    if (eventAiUserId != currentUserId) {
-                                        clientEventData.remove("newMemoryData")
-                                    }
-
-                                    // 4. Construct and send the SSE event.
-                                    val sseEvent =
-                                        SseEmitter.event()
-                                            .id(UUID.randomUUID().toString())
-                                            .name(event.eventType)
-                                            .data(
-                                                event.copy(data = clientEventData),
-                                                MediaType.APPLICATION_JSON,
-                                            )
-
-                                    emitter.send(sseEvent)
-                                } catch (ioe: IOException) {
-                                    throw CancellationException("Client disconnected.", ioe)
-                                } catch (e: Exception) {
-                                    logger.error(
-                                        "Error sending event for session {}: {}",
-                                        sessionId,
-                                        e.message,
-                                    )
-                                    // Cancel the collector job on send error. The emitter's onError
-                                    // will be triggered.
-                                    throw CancellationException("Failed to send SSE event.", e)
+                            // 2. Filter the stream based on the 'fromTick' parameter and collect
+                            // events.
+                            sessionFlow
+                                .filter { event ->
+                                    val eventData = event.data as? Map<*, *>
+                                    val eventTick = eventData?.get("tickNumber") as? Number
+                                    // Pass through events without a tick (e.g., global errors) or
+                                    // events >= fromTick.
+                                    eventTick == null || eventTick.toLong() >= fromTick
                                 }
-                            }
-                    }
+                                .collect { event ->
+                                    try {
+                                        // 3. Filter sensitive data before sending.
+                                        val originalEventData =
+                                            event.data as? Map<*, *> ?: emptyMap<Any, Any>()
+                                        val clientEventData = originalEventData.toMutableMap()
 
-                // Suspend the main coroutine until its children (heartbeat, collector) are
-                // cancelled.
-                joinAll(heartbeatJob, collectingJob)
+                                        val eventAiUserId =
+                                            clientEventData["userId"]
+                                                as? Long // Assuming key is 'userId' in final DTO
+                                        if (eventAiUserId != currentUserId) {
+                                            clientEventData.remove("newMemoryData")
+                                        }
 
-                // If we reach here, it means the stream was completed successfully.
-                emitter.complete()
+                                        // 4. Construct and send the SSE event.
+                                        val sseEvent =
+                                            SseEmitter.event()
+                                                .id(UUID.randomUUID().toString())
+                                                .name(event.eventType)
+                                                .data(
+                                                    event.copy(data = clientEventData),
+                                                    MediaType.APPLICATION_JSON,
+                                                )
+
+                                        emitter.send(sseEvent)
+                                    } catch (ioe: IOException) {
+                                        throw CancellationException("Client disconnected.", ioe)
+                                    } catch (e: Exception) {
+                                        logger.error(
+                                            "Error sending event for session {}: {}",
+                                            sessionId,
+                                            e.message,
+                                        )
+                                        // Cancel the collector job on send error. The emitter's
+                                        // onError
+                                        // will be triggered.
+                                        throw CancellationException("Failed to send SSE event.", e)
+                                    }
+                                }
+                        }
+
+                    // Suspend the main coroutine until its children (heartbeat, collector) are
+                    // cancelled.
+                    listOfNotNull(heartbeatJob, collectingJob).joinAll()
+
+                    // If we reach here, it means the stream was completed successfully.
+                    emitter.complete()
+                }
             } catch (e: CancellationException) {
                 logger.info(
                     "SSE Stream coroutine for session {} was cancelled: {}",

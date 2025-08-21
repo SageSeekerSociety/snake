@@ -222,6 +222,12 @@ services:
       - '--web.console.templates=/usr/share/prometheus/consoles'
     ports:
       - "9091:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9090/-/ready > /dev/null"]
+      start_period: 30s
+      interval: 10s
+      timeout: 5s
+      retries: 12
     depends_on:
       - backend-controller
       - backend-worker
@@ -237,8 +243,8 @@ services:
       - ./grafana-provisioning/datasources:/etc/grafana/provisioning/datasources
       - ./grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=grafana
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
     depends_on:
       - prometheus
     restart: unless-stopped
@@ -264,7 +270,7 @@ services:
       - loki_data:/loki
     command: -config.file=/etc/loki/local-config.yaml
     healthcheck:
-      test: ["CMD-SHELL","wget -qO- http://localhost:3100/ready | grep -q 'ready'"]
+      test: ["CMD-SHELL","wget -qO- http://127.0.0.1:3100/ready | grep -q 'ready'"]
       start_period: 60s
       interval: 10s
       timeout: 5s

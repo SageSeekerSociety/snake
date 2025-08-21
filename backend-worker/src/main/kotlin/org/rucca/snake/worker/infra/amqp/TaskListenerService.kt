@@ -21,8 +21,7 @@ import org.springframework.stereotype.Service
 @Service
 class TaskListenerService(
     private val taskProcessor: TaskProcessor,
-    @Qualifier("applicationCoroutineScope")
-    private val applicationScope: CoroutineScope,
+    @Qualifier("applicationCoroutineScope") private val applicationScope: CoroutineScope,
     openTelemetry: OpenTelemetry,
 ) {
     private val logger = LoggerFactory.getLogger(TaskListenerService::class.java)
@@ -33,6 +32,7 @@ class TaskListenerService(
     private object AmqpGetter : TextMapGetter<Message> {
         override fun keys(carrier: Message): Iterable<String> =
             carrier.messageProperties.headers.keys
+
         override fun get(carrier: Message?, key: String): String? {
             val v = carrier?.messageProperties?.headers?.get(key) ?: return null
             return when (v) {
@@ -54,21 +54,31 @@ class TaskListenerService(
             extractedSpanContext.traceId,
             extractedSpanContext.spanId,
             extractedSpanContext.isRemote,
-            props.consumerQueue
+            props.consumerQueue,
         )
 
-        val consumerSpan = tracer.spanBuilder("$operation.receive")
-            .setSpanKind(SpanKind.CONSUMER)
-            .setParent(extracted)
-            .setAttribute(AttributeKey.stringKey("messaging.system"), "rabbitmq")
-            .setAttribute(AttributeKey.stringKey("messaging.destination.name"), props.consumerQueue ?: "")
-            .setAttribute(AttributeKey.stringKey("messaging.operation"), "process")
-            .setAttribute(AttributeKey.stringKey("messaging.rabbitmq.delivery_tag"), props.deliveryTag.toString())
-            .setAttribute(AttributeKey.stringKey("app.job_id"), jobId)
-            .startSpan()
+        val consumerSpan =
+            tracer
+                .spanBuilder("$operation.receive")
+                .setSpanKind(SpanKind.CONSUMER)
+                .setParent(extracted)
+                .setAttribute(AttributeKey.stringKey("messaging.system"), "rabbitmq")
+                .setAttribute(
+                    AttributeKey.stringKey("messaging.destination.name"),
+                    props.consumerQueue ?: "",
+                )
+                .setAttribute(AttributeKey.stringKey("messaging.operation"), "process")
+                .setAttribute(
+                    AttributeKey.stringKey("messaging.rabbitmq.delivery_tag"),
+                    props.deliveryTag.toString(),
+                )
+                .setAttribute(AttributeKey.stringKey("app.job_id"), jobId)
+                .startSpan()
 
-        return applicationScope.future(extracted.asContextElement()) {
-            (extracted.makeCurrent()).use { _: Scope ->
+        val ctxWithConsumer = extracted.with(consumerSpan)
+
+        return applicationScope.future(ctxWithConsumer.asContextElement()) {
+            ctxWithConsumer.makeCurrent().use { _: Scope ->
                 try {
                     taskProcessor.processMessage(message)
 
@@ -79,7 +89,11 @@ class TaskListenerService(
                     consumerSpan.setStatus(StatusCode.ERROR, e.message ?: "error")
                     logger.error(
                         "Error processing {} task for jobId={} from queue={}. Error={}",
-                        operation, jobId, props.consumerQueue, e.message, e
+                        operation,
+                        jobId,
+                        props.consumerQueue,
+                        e.message,
+                        e,
                     )
                     throw e
                 } finally {

@@ -24,10 +24,10 @@ import org.rucca.snake.common.infra.persistence.entity.CompilationJob
 import org.rucca.snake.common.infra.persistence.entity.ExecutionJob
 import org.rucca.snake.common.infra.persistence.repository.CompilationJobRepository
 import org.rucca.snake.common.infra.persistence.repository.ExecutionJobRepository
+import org.rucca.snake.common.utils.withSuspendingSpan
 import org.rucca.snake.controller.domain.model.BatchExecutionItem
 import org.rucca.snake.controller.domain.model.JobSseEvent
 import org.rucca.snake.controller.infra.storage.MinioService
-import org.rucca.snake.controller.utils.withSuspendingSpan
 import org.slf4j.LoggerFactory
 import org.springframework.amqp.AmqpException
 import org.springframework.amqp.core.MessageProperties

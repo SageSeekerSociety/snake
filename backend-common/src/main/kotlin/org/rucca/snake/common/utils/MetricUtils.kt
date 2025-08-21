@@ -1,4 +1,4 @@
-package org.rucca.snake.controller.utils
+package org.rucca.snake.common.utils
 
 import io.micrometer.core.instrument.Clock
 import io.micrometer.core.instrument.Timer

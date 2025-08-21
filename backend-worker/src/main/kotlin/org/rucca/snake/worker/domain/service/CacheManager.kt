@@ -2,7 +2,6 @@ package org.rucca.snake.worker.domain.service
 
 import io.opentelemetry.api.OpenTelemetry
 import io.opentelemetry.instrumentation.annotations.WithSpan
-import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -15,10 +14,10 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.rucca.snake.common.utils.withSuspendingSpan
 import org.rucca.snake.worker.config.ApplicationConfig
 import org.rucca.snake.worker.infra.storage.MinioObjectInfo
 import org.rucca.snake.worker.infra.storage.MinioService
-import org.rucca.snake.worker.utils.withSuspendingSpan
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Service
@@ -126,7 +125,10 @@ class CacheManager(
                     )
                     withContext(Dispatchers.IO) { Files.createDirectories(localPath.parent) }
 
-                    val downloadSuccess = tracer.withSuspendingSpan("cache.download_on_miss") { minioService.downloadObject(objectKey, localPath) }
+                    val downloadSuccess =
+                        tracer.withSuspendingSpan("cache.download_on_miss") {
+                            minioService.downloadObject(objectKey, localPath)
+                        }
                     if (!downloadSuccess) {
                         logger.error(
                             "Failed to download object '{}' for user {}.",

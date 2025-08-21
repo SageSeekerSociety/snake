@@ -14,14 +14,9 @@
 
                 <mdc/>
 
-                <pattern>
-                    <pattern>
-                        {
-                        "service_name":"${springAppName:-}",
-                        "env":"${spring.profiles.active:-prod}"
-                        }
-                    </pattern>
-                </pattern>
+                <provider class="net.logstash.logback.composite.GlobalCustomFieldsJsonProvider">
+                    <customFields>{"service_name":"${springAppName:-}","env":"${spring.profiles.active:-prod}"}</customFields>
+                </provider>
             </providers>
         </encoder>
     </appender>

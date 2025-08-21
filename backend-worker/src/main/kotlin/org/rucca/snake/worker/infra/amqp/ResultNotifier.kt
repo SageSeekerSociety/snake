@@ -30,9 +30,10 @@ class ResultNotifier(
     private val propagators = openTelemetry.propagators
 
     // 创建一个 TextMapSetter 实例，用于操作 MessageProperties
-    private val rabbitMqSetter = TextMapSetter<MessageProperties> { carrier, key, value ->
-        carrier?.headers?.put(key, value)
-    }
+    private val rabbitMqSetter =
+        TextMapSetter<MessageProperties> { carrier, key, value ->
+            carrier?.headers?.put(key, value)
+        }
 
     suspend fun notifyCompilationResult(
         jobId: UUID,
@@ -71,7 +72,11 @@ class ResultNotifier(
                     message.messageProperties.headers[AmqpConstants.HEADER_MESSAGE_TYPE] =
                         messageType
 
-                    propagators.textMapPropagator.inject(Context.current(), message.messageProperties, rabbitMqSetter)
+                    propagators.textMapPropagator.inject(
+                        Context.current(),
+                        message.messageProperties,
+                        rabbitMqSetter,
+                    )
 
                     message
                 }

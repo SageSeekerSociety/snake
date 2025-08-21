@@ -6,14 +6,16 @@ import io.opentelemetry.api.OpenTelemetry
 import io.opentelemetry.api.trace.Tracer
 import io.opentelemetry.context.Context
 import io.opentelemetry.extension.kotlin.asContextElement
-import io.opentelemetry.instrumentation.annotations.WithSpan
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.time.Duration
 import java.time.Instant
+import java.util.Base64
+import java.util.UUID
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.regex.Pattern
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
@@ -22,20 +24,17 @@ import org.rucca.snake.common.domain.model.ExecutionRequest
 import org.rucca.snake.common.domain.model.ExecutionResultNotification
 import org.rucca.snake.common.domain.model.JobStatus
 import org.rucca.snake.common.infra.persistence.repository.ExecutionJobRepository
+import org.rucca.snake.common.utils.recordSuspendable
+import org.rucca.snake.common.utils.withSpan
+import org.rucca.snake.common.utils.withSuspendingSpan
 import org.rucca.snake.worker.config.ApplicationConfig
 import org.rucca.snake.worker.infra.amqp.ResultNotifier
 import org.rucca.snake.worker.infra.storage.MinioService
 import org.rucca.snake.worker.utils.deleteDirectoryRecursively
-import org.rucca.snake.worker.utils.recordSuspendable
-import org.rucca.snake.worker.utils.withSpan
-import org.rucca.snake.worker.utils.withSuspendingSpan
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.stereotype.Service
-import java.util.Base64
-import java.util.UUID
-import java.util.concurrent.atomic.AtomicInteger
 
 @Service
 class ExecuteService(
@@ -58,22 +57,27 @@ class ExecuteService(
     private val nsjailSemaphore =
         Semaphore(permits = applicationConfig.concurrency.nsjailPermits) // Get permits from config
 
-    private val availableNsjailPermits = meterRegistry.gauge(
-        "nsjail.permits.available",
-        AtomicInteger(applicationConfig.concurrency.nsjailPermits)
-    )
+    private val availableNsjailPermits =
+        meterRegistry.gauge(
+            "nsjail.permits.available",
+            AtomicInteger(applicationConfig.concurrency.nsjailPermits),
+        )
 
-    private fun jobOutcomeCounter(status: JobStatus) = meterRegistry.counter(
-        "job.outcomes.total",
-        "type", "execute", // Tag: 任务类型
-        "status", status.name   // Tag: 最终状态
-    )
+    private fun jobOutcomeCounter(status: JobStatus) =
+        meterRegistry.counter(
+            "job.outcomes.total",
+            "type",
+            "execute", // Tag: 任务类型
+            "status",
+            status.name, // Tag: 最终状态
+        )
 
-    private val executionTimer = Timer.builder("job.processing.duration")
-        .tag("type", "execute")
-        .description("Measures the duration of execution job processing")
-        .publishPercentiles(0.5, 0.95, 0.99) // 发布 P50, P95, P99 延迟
-        .register(meterRegistry)
+    private val executionTimer =
+        Timer.builder("job.processing.duration")
+            .tag("type", "execute")
+            .description("Measures the duration of execution job processing")
+            .publishPercentiles(0.5, 0.95, 0.99) // 发布 P50, P95, P99 延迟
+            .register(meterRegistry)
 
     // Regex to parse the custom Cgroup Stats log line
     // Example: [I] Cgroup Stats: CPU_usec=12896 MEM_peak_bytes=2220032 (user=8928, system=3968)
@@ -109,7 +113,7 @@ class ExecuteService(
             val inputFile = executionDir.resolve("input.txt")
             val logFile = executionDir.resolve("nsjail.log")
             val programFileName = "program"
-            val programPathInExecDir = userDataDir.resolve(programFileName)
+            val programPathInExecDir = executionDir.resolve(programFileName)
             val minioObjectKey = "programs/$aiOwnerUserId/$programFileName" // Key in MinIO
 
             executionTimer.recordSuspendable {
@@ -122,7 +126,8 @@ class ExecuteService(
                 var cpuTimeSeconds: Double? = null
                 var memoryKb: Long? = null
                 var exitCode: Int? = null
-                var sandboxLogContent: String? = null // Store log content if needed for debugging or result
+                var sandboxLogContent: String? =
+                    null // Store log content if needed for debugging or result
                 var errorDetails: String? = null
                 val startTime = Instant.now()
 
@@ -130,11 +135,13 @@ class ExecuteService(
                 var previousMemoryData = "" // Default to empty string
                 if (tickNumber > 0) { // Assuming tick numbers start from 0 or 1 for game ticks
                     val previousTickNumber = tickNumber - 1
-                    val redisKey = "session:${sessionId}:memory:${aiOwnerUserId}:${previousTickNumber}"
+                    val redisKey =
+                        "session:${sessionId}:memory:${aiOwnerUserId}:${previousTickNumber}"
                     try {
-                        previousMemoryData = tracer.withSpan("redis.get_memory") {
-                            redisTemplate.opsForValue().get(redisKey) ?: ""
-                        }
+                        previousMemoryData =
+                            tracer.withSpan("redis.get_memory") {
+                                redisTemplate.opsForValue().get(redisKey) ?: ""
+                            }
                         logger.info(
                             "Retrieved previous memory for job {} from Redis key {}",
                             jobId,
@@ -152,7 +159,8 @@ class ExecuteService(
                         updateJobStatus(
                             jobId,
                             JobStatus.ERROR,
-                            errorDetails = "Failed to read previous memory from Redis: ${e.message}",
+                            errorDetails =
+                                "Failed to read previous memory from Redis: ${e.message}",
                             endTime = Instant.now(),
                         )
                         resultNotifier.notifyExecutionResult(
@@ -186,7 +194,8 @@ class ExecuteService(
 
                 val decodedPreviousMemory =
                     try {
-                        if (previousMemoryData.isNotBlank()) Base64.getDecoder().decode(previousMemoryData)
+                        if (previousMemoryData.isNotBlank())
+                            Base64.getDecoder().decode(previousMemoryData)
                         else byteArrayOf()
                     } catch (e: IllegalArgumentException) {
                         logger.warn(
@@ -217,9 +226,10 @@ class ExecuteService(
 
                     // 3. Get Program Path (from cache or download from MinIO)
                     // This function handles cache checking and download internally
-                    val programPathInCache = tracer.withSuspendingSpan("cache.get_program") {
-                        cacheManager.getProgramPath(aiOwnerUserId, minioObjectKey)
-                    }
+                    val programPathInCache =
+                        tracer.withSuspendingSpan("cache.get_program") {
+                            cacheManager.getProgramPath(aiOwnerUserId, minioObjectKey)
+                        }
                     if (programPathInCache == null || !Files.exists(programPathInCache)) {
                         logger.error(
                             "Failed to obtain program binary for user {} (job {})",
@@ -228,22 +238,18 @@ class ExecuteService(
                         )
                         throw RuntimeException("Could not get program binary") // Critical failure
                     }
-                    // We need the program inside the chroot dir for nsjail.
-                    // Simplest way: copy the cached program into the *execution-specific* user data dir.
-                    // Nsjail will then chroot into userDataDir.
+                    // Copy the cached program into the job-specific execution dir
                     withContext(Dispatchers.IO + Context.current().asContextElement()) {
                         try {
-                            // Copy from cache to the *parent* data directory (/app/data/{userId}/program)
-                            // nsjail will chroot to /app/data/{userId}
                             Files.copy(
                                 programPathInCache,
                                 programPathInExecDir,
                                 java.nio.file.StandardCopyOption.REPLACE_EXISTING,
                             )
-                            // Make it executable (important!)
-                            programPathInExecDir
-                                .toFile()
-                                .setExecutable(true, true) // Owner and group execute
+                            // Preserve executable bit
+                            val srcFile = programPathInCache.toFile()
+                            val destFile = programPathInExecDir.toFile()
+                            destFile.setExecutable(srcFile.canExecute(), true)
                             logger.info(
                                 "Copied program for job {} to execution dir {}",
                                 jobId,
@@ -263,11 +269,17 @@ class ExecuteService(
                     withContext(Dispatchers.IO + Context.current().asContextElement()) {
                         try {
                             val aiInputContentBytes =
-                                request.inputData.toByteArray() + "\n".toByteArray() + decodedPreviousMemory
+                                request.inputData.toByteArray() +
+                                    "\n".toByteArray() +
+                                    decodedPreviousMemory
                             Files.write(inputFile, aiInputContentBytes)
                             logger.info("Prepared input file for job {} at {}", jobId, inputFile)
                         } catch (e: IOException) {
-                            logger.error("Failed to write input file for job {}: {}", jobId, e.message)
+                            logger.error(
+                                "Failed to write input file for job {}: {}",
+                                jobId,
+                                e.message,
+                            )
                             throw RuntimeException("IO error writing input file", e)
                         }
                     }
@@ -276,29 +288,34 @@ class ExecuteService(
                     logger.debug("Job {} WAITING for nsjail permit...", jobId)
                     val startTimeNsjailWait = System.nanoTime()
 
-                    availableNsjailPermits?.decrementAndGet()
-                    val nsjailResult: NsjailResult = try {
-                        nsjailSemaphore.withPermit {
-                            val waitTimeMs = (System.nanoTime() - startTimeNsjailWait) / 1_000_000.0
-                            logger.info("Acquired nsjail permit for job {} in {} ms", jobId, waitTimeMs)
+                    val nsjailResult: NsjailResult = nsjailSemaphore.withPermit {
+                        availableNsjailPermits?.decrementAndGet()
+                        try {
+                            val waitTimeMs =
+                                (System.nanoTime() - startTimeNsjailWait) / 1_000_000.0
+                            logger.info(
+                                "Acquired nsjail permit for job {} in {} ms",
+                                jobId,
+                                waitTimeMs,
+                            )
                             val res =
                                 tracer.withSuspendingSpan("nsjail.execute") {
                                     runNsjail(
-                                        userId = aiOwnerUserId, // Pass aiOwnerUserId
+                                        // Pass aiOwnerUserId
                                         jobId = jobId, // Pass jobId for logging context if needed in runNsjail
                                         userDataDir = userDataDir, // Chroot target
                                         logFilePath = logFile,
                                         inputFile = inputFile, // Redirect stdin from this file
-                                        programName = programFileName, // Program to execute relative to chroot
+                                        programPath = "execute/$jobId/$programFileName", // Program to execute relative to chroot
                                         request = request, // Pass request for resource limits
                                     )
                                 }
-                            logger.info("Released nsjail permit for job {}", jobId)
                             res // Return the result
+                        } finally {
+                            availableNsjailPermits?.incrementAndGet()
                         }
-                    } finally {
-                        availableNsjailPermits?.incrementAndGet()
                     }
+                    logger.info("Released nsjail permit for job {}", jobId)
 
                     // 6. Process Nsjail Result
                     exitCode = nsjailResult.exitCode
@@ -321,7 +338,9 @@ class ExecuteService(
                         rawMemoryFromAI?.take(100),
                     )
                     newMemoryData =
-                        rawMemoryFromAI?.let { Base64.getEncoder().encodeToString(it.toByteArray()) }
+                        rawMemoryFromAI?.let {
+                            Base64.getEncoder().encodeToString(it.toByteArray())
+                        }
 
                     // Memory Size Limit Check (before storing to Redis)
                     memoryDataForRedis = newMemoryData
@@ -336,10 +355,11 @@ class ExecuteService(
                                     memorySizeBytes,
                                     memoryMaxSizeKb,
                                 )
-                                currentStatus =
-                                    JobStatus.ERROR // Or a custom status like JobStatus.MEMORY_LIMIT_USER
+                                currentStatus = JobStatus.ERROR // Or a custom status like
+                                // JobStatus.MEMORY_LIMIT_USER
                                 errorDetails =
-                                    (errorDetails ?: "") + " Produced memory data exceeded size limit."
+                                    (errorDetails ?: "") +
+                                        " Produced memory data exceeded size limit."
                                 memoryDataForRedis = null // Do not store oversized memory
                             }
                         } catch (e: IllegalArgumentException) {
@@ -373,17 +393,20 @@ class ExecuteService(
                     }
 
                     // Store New Memory to Redis (if valid and job was successful so far)
-                    // We check currentStatus before nsjail result processing, so if it's already ERROR
+                    // We check currentStatus before nsjail result processing, so if it's already
+                    // ERROR
                     // (e.g. from mem size check), don't store
                     if (currentStatus == JobStatus.SUCCESS && memoryDataForRedis != null) {
                         val redisKey = "session:${sessionId}:memory:${aiOwnerUserId}:${tickNumber}"
                         try {
                             tracer.withSpan("redis.set_memory") {
-                                redisTemplate.opsForValue().set(
-                                    redisKey,
-                                    memoryDataForRedis,
-                                    Duration.ofMinutes(memoryTtlMinutes),
-                                )
+                                redisTemplate
+                                    .opsForValue()
+                                    .set(
+                                        redisKey,
+                                        memoryDataForRedis,
+                                        Duration.ofMinutes(memoryTtlMinutes),
+                                    )
                             }
                             logger.info(
                                 "Stored new memory for job {} to Redis key {} with TTL {} mins",
@@ -403,8 +426,10 @@ class ExecuteService(
                             currentStatus =
                                 JobStatus.ERROR // Update status before final updateJobStatus call
                             errorDetails =
-                                (errorDetails ?: "") + " Failed to store new memory to Redis: ${e.message}"
-                            // We won't throw here to allow finally block to run, but status is ERROR.
+                                (errorDetails ?: "") +
+                                    " Failed to store new memory to Redis: ${e.message}"
+                            // We won't throw here to allow finally block to run, but status is
+                            // ERROR.
                             // The existing resultNotifier in finally will pick up the ERROR status.
                         }
                     }
@@ -433,13 +458,21 @@ class ExecuteService(
                 } catch (e: TimeoutCancellationException) {
                     // This would typically be caught if the semaphore wait times out,
                     // or if some surrounding operation had a timeout.
-                    logger.error("Operation timed out for job {} (could be semaphore wait or other)", jobId)
+                    logger.error(
+                        "Operation timed out for job {} (could be semaphore wait or other)",
+                        jobId,
+                    )
                     currentStatus = JobStatus.ERROR // Or maybe a specific timeout status
                     errorDetails = "Worker operation timed out: ${e.message}"
                     // Re-throw
                     throw e
                 } catch (e: Exception) {
-                    logger.error("Unhandled exception during execution for job {}: {}", jobId, e.message, e)
+                    logger.error(
+                        "Unhandled exception during execution for job {}: {}",
+                        jobId,
+                        e.message,
+                        e,
+                    )
                     currentStatus = JobStatus.ERROR // Worker internal error
                     errorDetails = "Internal worker error during execution: ${e.message}"
                     // Re-throw to ensure NACK
@@ -499,7 +532,8 @@ class ExecuteService(
                                 exitCode = exitCode,
                                 action = action.takeIf { it.isNotBlank() },
                                 newMemoryData =
-                                    if (currentStatus == JobStatus.SUCCESS) memoryDataForRedis else null,
+                                    if (currentStatus == JobStatus.SUCCESS) memoryDataForRedis
+                                    else null,
                                 errorDetails = errorDetails.takeUnless { it.isNullOrBlank() },
                                 sandboxLogRef = finalLogRef,
                                 clientRequestId = request.clientRequestId,
@@ -522,13 +556,6 @@ class ExecuteService(
                                     executionDir,
                                 )
                             }
-                            // Also remove the copied program file from the parent data directory
-                            Files.deleteIfExists(programPathInExecDir)
-                            logger.info(
-                                "Cleaned up copied program file for job {}: {}",
-                                jobId,
-                                programPathInExecDir,
-                            )
                         } catch (e: Exception) {
                             logger.error(
                                 "Failed to cleanup execution directory or program for job {}: {}",
@@ -544,12 +571,11 @@ class ExecuteService(
 
     /** Runs the nsjail process. */
     private suspend fun runNsjail(
-        userId: Long, // For context
         jobId: String, // For context
         userDataDir: Path, // The directory to chroot into (/app/data/{userId})
         logFilePath: Path,
         inputFile: Path, // File to redirect stdin from
-        programName: String, // Relative path inside chroot (e.g., "program")
+        programPath: String, // Relative path inside chroot (e.g., "program")
         request: ExecutionRequest, // Contains resource limits
     ): NsjailResult {
         val nsjailPath = applicationConfig.nsjail.path
@@ -580,7 +606,7 @@ class ExecuteService(
 
         // Add the command to execute
         command.add("--")
-        command.add("./$programName") // Execute the program relative to the chroot dir
+        command.add("./$programPath") // Execute the program relative to the chroot dir
 
         logger.info("Executing nsjail command for job {}: {}", jobId, command.joinToString(" "))
 
@@ -591,26 +617,31 @@ class ExecuteService(
         try {
             // Execute within IO context
             withContext(Dispatchers.IO + Context.current().asContextElement()) {
-                val process = tracer.withSuspendingSpan("nsjail.start_process", ctx = Dispatchers.IO) {
-                    val pb = ProcessBuilder(command)
-                    pb.redirectInput(ProcessBuilder.Redirect.from(inputFile.toFile()))
-                    pb.start()
-                }
+                val process =
+                    tracer.withSuspendingSpan("nsjail.start_process", ctx = Dispatchers.IO) {
+                        val pb = ProcessBuilder(command)
+                        pb.redirectInput(ProcessBuilder.Redirect.from(inputFile.toFile()))
+                        pb.start()
+                    }
 
                 coroutineScope {
                     val ctx = Context.current()
-                    val outputGobbler = async(Dispatchers.IO + ctx.asContextElement()) {
-                        process.inputStream.bufferedReader().use { it.readText() }
-                    }
-                    val errorGobbler  = async(Dispatchers.IO + ctx.asContextElement()) {
-                        process.errorStream.bufferedReader().use { it.readText() }
-                    }
+                    val outputGobbler =
+                        async(Dispatchers.IO + ctx.asContextElement()) {
+                            process.inputStream.bufferedReader().use { it.readText() }
+                        }
+                    val errorGobbler =
+                        async(Dispatchers.IO + ctx.asContextElement()) {
+                            process.errorStream.bufferedReader().use { it.readText() }
+                        }
 
-                    val waitTimeoutMillis = TimeUnit.SECONDS.toMillis(request.wallTimeLimitSeconds + 2)
+                    val waitTimeoutMillis =
+                        TimeUnit.SECONDS.toMillis(request.wallTimeLimitSeconds + 2)
 
-                    val finished = tracer.withSuspendingSpan("nsjail.wait_for", ctx = Dispatchers.IO) {
-                        process.waitFor(waitTimeoutMillis, TimeUnit.MILLISECONDS)
-                    }
+                    val finished =
+                        tracer.withSuspendingSpan("nsjail.wait_for", ctx = Dispatchers.IO) {
+                            process.waitFor(waitTimeoutMillis, TimeUnit.MILLISECONDS)
+                        }
 
                     if (!finished) {
                         tracer.withSuspendingSpan("nsjail.destroy_forcibly", ctx = Dispatchers.IO) {
@@ -618,9 +649,14 @@ class ExecuteService(
                         }
                         exitCode = -9
                         processOutput = outputGobbler.await().take(10 * 1024)
-                        logContent = tracer.withSuspendingSpan("nsjail.read_log_on_timeout", ctx = Dispatchers.IO) {
-                            runCatching { Files.readString(logFilePath) }.getOrElse { "[Log file unavailable after timeout]" }
-                        }
+                        logContent =
+                            tracer.withSuspendingSpan(
+                                "nsjail.read_log_on_timeout",
+                                ctx = Dispatchers.IO,
+                            ) {
+                                runCatching { Files.readString(logFilePath) }
+                                    .getOrElse { "[Log file unavailable after timeout]" }
+                            }
                         return@coroutineScope
                     }
 
@@ -631,10 +667,11 @@ class ExecuteService(
                         logger.warn("Nsjail stderr for job {}: {}", jobId, nsjailErrors)
                     }
 
-                    logContent = tracer.withSuspendingSpan("nsjail.read_log", ctx = Dispatchers.IO) {
-                        runCatching { Files.readString(logFilePath) }
-                            .getOrElse { "[Failed to read log file: ${it.message}]" }
-                    }
+                    logContent =
+                        tracer.withSuspendingSpan("nsjail.read_log", ctx = Dispatchers.IO) {
+                            runCatching { Files.readString(logFilePath) }
+                                .getOrElse { "[Failed to read log file: ${it.message}]" }
+                        }
                 }
             }
         } catch (ioe: IOException) {

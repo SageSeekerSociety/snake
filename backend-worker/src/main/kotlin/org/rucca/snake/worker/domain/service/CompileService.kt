@@ -14,11 +14,11 @@ import org.rucca.snake.common.domain.exception.CompilationTimeoutException
 import org.rucca.snake.common.domain.model.CompilationRequest
 import org.rucca.snake.common.domain.model.JobStatus
 import org.rucca.snake.common.infra.persistence.repository.CompilationJobRepository
+import org.rucca.snake.common.utils.withSuspendingSpan
 import org.rucca.snake.worker.config.ApplicationConfig
 import org.rucca.snake.worker.infra.amqp.ResultNotifier
 import org.rucca.snake.worker.infra.storage.MinioService
 import org.rucca.snake.worker.utils.deleteDirectoryRecursively
-import org.rucca.snake.worker.utils.withSuspendingSpan
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 
@@ -28,7 +28,7 @@ class CompileService(
     private val minioService: MinioService,
     private val resultNotifier: ResultNotifier,
     private val applicationConfig: ApplicationConfig,
-    openTelemetry: OpenTelemetry
+    openTelemetry: OpenTelemetry,
 ) {
     private val tracer = openTelemetry.getTracer(CompileService::class.java.name)
 
@@ -97,10 +97,7 @@ class CompileService(
             )
 
             val downloadSuccess: Boolean =
-                tracer.withSuspendingSpan(
-                    "minio.download_source",
-                    ctx = Dispatchers.IO,
-                ) {
+                tracer.withSuspendingSpan("minio.download_source", ctx = Dispatchers.IO) {
                     minioService.downloadObject(sourceCodeRef, sourceFilePath)
                 }
 
@@ -143,9 +140,10 @@ class CompileService(
                 logger.info("Compilation successful for job {}", jobId)
 
                 // 5. Upload successful result to MinIO
-                val etag = tracer.withSuspendingSpan("minio.upload_program") {
-                    minioService.uploadFile(compiledProgramObjectKey, outputFilePath)
-                }
+                val etag =
+                    tracer.withSuspendingSpan("minio.upload_program") {
+                        minioService.uploadFile(compiledProgramObjectKey, outputFilePath)
+                    }
                 if (etag == null) {
                     logger.error("Failed to upload compiled program to MinIO for job {}", jobId)
                     currentStatus = JobStatus.ERROR // Indicate an infrastructure error

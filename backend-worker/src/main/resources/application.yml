@@ -1,7 +1,5 @@
 # Spring Boot 应用基本配置
 spring:
-  profiles:
-    active: dev
   application:
     name: snake.worker
   # --- 数据库配置 ---
@@ -49,9 +47,6 @@ management:
   endpoint:
     health:
       show-details: when_authorized
-  otlp:
-    tracing:
-      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}
 
 otel:
   service:
@@ -59,6 +54,7 @@ otel:
   exporter:
     otlp:
       protocol: grpc
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}
 
 application:
   compiler-path: /bin/clang++
