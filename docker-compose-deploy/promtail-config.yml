@@ -69,8 +69,10 @@ scrape_configs:
       - labels:
           level:
           logger:
-          trace:
-          span:
+      - template:
+          # Ensure a final message exists and preserve trace/span as inline fields
+          source: message
+          template: '{{ .message | default .log }}{{ if .trace }} trace_id={{ .trace }}{{ end }}{{ if .span }} span_id={{ .span }}{{ end }}'
 
       # 7) 统一输出格式
       #    使用 message 字段作为最终的日志行

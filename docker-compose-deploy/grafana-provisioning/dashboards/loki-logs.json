@@ -1,41 +1,4 @@
 {
-  "__inputs": [
-    {
-      "name": "DS_LOKI",
-      "label": "Loki",
-      "description": "",
-      "type": "datasource",
-      "pluginId": "loki",
-      "pluginName": "Loki"
-    }
-  ],
-  "__elements": {},
-  "__requires": [
-    {
-      "type": "grafana",
-      "id": "grafana",
-      "name": "Grafana",
-      "version": "12.0.4"
-    },
-    {
-      "type": "panel",
-      "id": "logs",
-      "name": "Logs",
-      "version": ""
-    },
-    {
-      "type": "datasource",
-      "id": "loki",
-      "name": "Loki",
-      "version": "1.0.0"
-    },
-    {
-      "type": "panel",
-      "id": "timeseries",
-      "name": "Time series",
-      "version": ""
-    }
-  ],
   "annotations": {
     "list": [
       {
@@ -56,13 +19,13 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": null,
+  "id": 8,
   "links": [],
   "panels": [
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "my_loki_ds"
       },
       "fieldConfig": {
         "defaults": {
@@ -145,7 +108,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "my_loki_ds"
           },
           "direction": "backward",
           "editorMode": "code",
@@ -160,7 +123,11 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "my_loki_ds"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
       },
       "gridPos": {
         "h": 25,
@@ -186,7 +153,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "my_loki_ds"
           },
           "direction": "backward",
           "editorMode": "code",
@@ -199,16 +166,20 @@
       "type": "logs"
     }
   ],
+  "preload": false,
   "refresh": false,
   "schemaVersion": 41,
   "tags": [],
   "templating": {
     "list": [
       {
-        "current": {},
+        "current": {
+          "text": "",
+          "value": ""
+        },
         "datasource": {
           "type": "loki",
-          "uid": "${DS_LOKI}"
+          "uid": "my_loki_ds"
         },
         "definition": "",
         "name": "container",
@@ -242,7 +213,7 @@
     ]
   },
   "time": {
-    "from": "now-3h",
+    "from": "now-5m",
     "to": "now"
   },
   "timepicker": {
@@ -260,7 +231,6 @@
   },
   "timezone": "",
   "title": "Loki Dashboard",
-  "uid": "liz0yRCZz",
-  "version": 5,
-  "weekStart": ""
+  "uid": "liz0yRCZzz",
+  "version": 1
 }

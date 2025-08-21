@@ -207,7 +207,9 @@ class ExecuteService(
 
                 try {
                     // 1. Update DB Status to RUNNING
-                    updateJobStatus(jobId, JobStatus.RUNNING, startTime = startTime)
+                    tracer.withSuspendingSpan("db.update_job_status") {
+                        updateJobStatus(jobId, JobStatus.RUNNING, startTime = startTime)
+                    }
                     currentStatus = JobStatus.RUNNING
 
                     // 2. Ensure execution directory exists
@@ -246,10 +248,10 @@ class ExecuteService(
                                 programPathInExecDir,
                                 java.nio.file.StandardCopyOption.REPLACE_EXISTING,
                             )
-                            // Preserve executable bit
-                            val srcFile = programPathInCache.toFile()
-                            val destFile = programPathInExecDir.toFile()
-                            destFile.setExecutable(srcFile.canExecute(), true)
+                            programPathInExecDir.toFile().apply {
+                                setReadable(true, /* ownerOnly= */ false)
+                                setExecutable(true, /* ownerOnly= */ false)
+                            }
                             logger.info(
                                 "Copied program for job {} to execution dir {}",
                                 jobId,
