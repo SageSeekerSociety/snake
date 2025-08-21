@@ -187,52 +187,74 @@ jobs:
       - name: Start compose
         working-directory: docker-compose-deploy
         run: |
+          # Set safer shell options for robustness
+          set -euo pipefail
+
+          # Configurable health check parameters
+          MAX_HEALTHCHECK_TRIES=20
+          HEALTHCHECK_SLEEP_SECS=5
+
           # Start services in background
-          docker compose --file docker-compose.yml up --no-build --detach || true
+          docker compose --file docker-compose.yml up --no-build --detach
 
           echo "=== Current Container Status (including exited containers) ==="
           docker compose ps -a
 
           # Wait for services to stabilize and check their health
-          max_tries=20
           tries=0
           all_healthy=false
 
-          until [ "$all_healthy" = true ] || [ $tries -eq $max_tries ]; do
-            echo "Waiting for services to become healthy... (try $((tries+1))/$max_tries)"
+          until [ "$all_healthy" = true ] || [ $tries -eq $MAX_HEALTHCHECK_TRIES ]; do
+            tries=$((tries+1))
+            echo "Waiting for services to become healthy... (try ${tries}/${MAX_HEALTHCHECK_TRIES})"
             docker compose ps -a
-            
-            # 1. Check for any unhealthy containers
-            unhealthy_services=$(docker compose ps -a | grep 'unhealthy' | awk '{print $1}')
-            if [ -n "$unhealthy_services" ]; then
-              echo "=== ERROR: Found unhealthy services: $unhealthy_services ==="
-              # Detailed error reporting can be added here if needed
-              exit 1
-            fi
 
-            # 2. Check for unexpectedly exited containers (ignore frontend)
-            exited_services=$(docker compose ps -a | grep 'Exited' | grep -v 'frontend' | awk '{print $1}')
+            # Check for unexpectedly exited containers (ignore frontend)
+            exited_services=$(docker compose ps -a | grep 'Exited' | grep -v 'frontend' | awk '{print $1}' || true)
             if [ -n "$exited_services" ]; then
                 echo "=== ERROR: Services have unexpectedly exited: $exited_services ==="
+                for service in $exited_services; do
+                  echo "===== Logs for exited service: $service ====="
+                  docker logs "$service" || echo "Could not get logs for $service"
+                done
                 exit 1
             fi
 
-            # 3. Check if all services with health checks are healthy
-            services_with_healthcheck=$(docker compose ps -a | grep -E '\(healthy\)|\(health: starting\)' | wc -l)
-            healthy_services=$(docker compose ps -a | grep '(healthy)' | wc -l)
+            # Count services that have a health status indicator
+            services_with_healthcheck=$(docker compose ps -a | grep -c -E '\(healthy\)|\(unhealthy\)|\(health: starting\)' || true)
+            healthy_services=$(docker compose ps -a | grep -c '(healthy)' || true)
 
-            if [ "$healthy_services" -eq "$services_with_healthcheck" ]; then
+            echo "Found $healthy_services healthy services out of $services_with_healthcheck services with health checks."
+
+            # Warn about unhealthy services but allow retries
+            unhealthy_services=$(docker compose ps -a | grep '(unhealthy)' | awk '{print $1}' || true)
+            if [ -n "$unhealthy_services" ]; then
+              echo "WARNING: The following services are unhealthy, will retry: $unhealthy_services"
+            fi
+
+            # Success condition: at least one service has a health check, and all of them are healthy
+            if [ "$services_with_healthcheck" -gt 0 ] && [ "$healthy_services" -eq "$services_with_healthcheck" ]; then
               all_healthy=true
-            else
-              tries=$((tries+1))
-              sleep 5
+            elif [ $tries -lt $MAX_HEALTHCHECK_TRIES ]; then
+              sleep $HEALTHCHECK_SLEEP_SECS
             fi
           done
 
           if [ "$all_healthy" = false ]; then
-            echo "=== ERROR: Services did not become healthy after $max_tries tries ==="
+            echo "=== ERROR: Services did not become healthy after $MAX_HEALTHCHECK_TRIES tries ==="
             docker compose ps -a
-            # You can add detailed logging for failing services here
+            
+            # Get all services that are not healthy or are not the frontend service that is expected to exit
+            failing_services=$(docker compose ps -a | grep -v -E '\(healthy\)|frontend.*Exited' | awk 'NR>1 {print $1}')
+            
+            if [ -n "$failing_services" ]; then
+              echo "=== Logs for failing or unhealthy services ==="
+              for service in $failing_services; do
+                echo "===== Logs for service: $service ====="
+                docker logs "$service" || echo "Could not get logs for $service"
+              done
+            fi
+            
             exit 1
           fi
 
