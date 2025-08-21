@@ -89,17 +89,19 @@ class CompileService(
                 }
 
             // 3. Download Source Code from MinIO
+            logger.info(
+                "Downloading source code for job {} from MinIO key '{}' to '{}'",
+                jobId,
+                sourceCodeRef,
+                sourceFilePath,
+            )
+
             val downloadSuccess: Boolean =
-                withContext(Dispatchers.IO) {
-                    logger.info(
-                        "Downloading source code for job {} from MinIO key '{}' to '{}'",
-                        jobId,
-                        sourceCodeRef,
-                        sourceFilePath,
-                    )
-                    tracer.withSuspendingSpan("minio.download_source") {
-                        minioService.downloadObject(sourceCodeRef, sourceFilePath)
-                    }
+                tracer.withSuspendingSpan(
+                    "minio.download_source",
+                    ctx = Dispatchers.IO,
+                ) {
+                    minioService.downloadObject(sourceCodeRef, sourceFilePath)
                 }
 
             if (!downloadSuccess) {

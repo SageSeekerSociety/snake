@@ -1,5 +1,9 @@
 package org.rucca.snake.controller.domain.controller
 
+import io.opentelemetry.api.OpenTelemetry
+import io.opentelemetry.api.trace.SpanKind
+import io.opentelemetry.context.Context
+import io.opentelemetry.extension.kotlin.asContextElement
 import jakarta.annotation.PreDestroy
 import java.io.IOException
 import java.time.Duration
@@ -27,8 +31,10 @@ class ExecuteController(
     private val jobSubmitService: JobSubmitService,
     private val jobFlowService: JobFlowService,
     private val authenticationService: AuthenticationService,
+    openTelemetry: OpenTelemetry,
 ) {
     private val logger = LoggerFactory.getLogger(ExecuteController::class.java)
+    private val tracer = openTelemetry.getTracer(ExecuteController::class.java.name)
 
     // Timeout for the SSE connection itself (managed by SseEmitter)
     private val sseTimeout = Duration.ofMinutes(5).toMillis()
@@ -47,7 +53,6 @@ class ExecuteController(
     suspend fun submitBatchExecutionRequest(
         @RequestBody requests: List<BatchExecutionItem>
     ): ResponseEntity<ApiResponse> {
-
         if (requests.isEmpty()) {
             return ResponseEntity.badRequest()
                 .body(
@@ -163,7 +168,15 @@ class ExecuteController(
                 }
 
         // Launch the main coroutine to manage the stream's lifecycle.
-        controllerScope.launch {
+        val reqCtx = Context.current()
+        controllerScope.launch(reqCtx.asContextElement()) {
+            val streamSpan =
+                tracer
+                    .spanBuilder("sse.stream")
+                    .setSpanKind(SpanKind.INTERNAL)
+                    .setParent(reqCtx)
+                    .startSpan()
+
             try {
                 // Launch a heartbeat coroutine to keep the connection alive through proxies.
                 val heartbeatJob = launch {
@@ -253,6 +266,8 @@ class ExecuteController(
                 } catch (t: Throwable) {
                     logger.warn("Failed to send error to a likely closed SSE stream: {}", t.message)
                 }
+            } finally {
+                streamSpan.end()
             }
         }
 

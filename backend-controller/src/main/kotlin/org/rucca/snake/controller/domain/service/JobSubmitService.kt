@@ -1,10 +1,15 @@
 package org.rucca.snake.controller.domain.service
 
+import io.micrometer.core.instrument.MeterRegistry
 import io.opentelemetry.api.OpenTelemetry
+import io.opentelemetry.api.common.AttributeKey
+import io.opentelemetry.api.trace.Span
+import io.opentelemetry.api.trace.SpanKind
+import io.opentelemetry.api.trace.StatusCode
 import io.opentelemetry.context.Context
 import io.opentelemetry.context.propagation.ContextPropagators
 import io.opentelemetry.context.propagation.TextMapSetter
-import io.opentelemetry.instrumentation.annotations.WithSpan
+import io.opentelemetry.extension.kotlin.asContextElement
 import java.io.InputStream
 import java.time.Instant
 import java.util.*
@@ -39,20 +44,96 @@ class JobSubmitService(
     private val rabbitTemplate: RabbitTemplate,
     private val minioService: MinioService,
     private val jobFlowService: JobFlowService,
+    private val meterRegistry: MeterRegistry,
     openTelemetry: OpenTelemetry,
     @Value("\${amqp.exchange.requests}") private val requestsExchangeName: String,
     @Value("\${amqp.routingkey.compile}") private val compileRoutingKey: String,
     @Value("\${amqp.routingkey.execute}") private val executeRoutingKey: String,
 ) {
-    private val tracer = openTelemetry.tracerProvider.get(JobSubmitService::class.java.name)
+    private val tracer = openTelemetry.getTracer(JobSubmitService::class.java.name)
     private val propagators: ContextPropagators = openTelemetry.propagators
 
     private val logger = LoggerFactory.getLogger(JobSubmitService::class.java)
 
-    private val rabbitMqSetter =
-        TextMapSetter<MessageProperties> { carrier, key, value ->
-            carrier?.headers?.put(key, value)
+    private object AmqpSetter : TextMapSetter<MessageProperties> {
+        override fun set(carrier: MessageProperties?, key: String, value: String) {
+            if (carrier != null) carrier.headers[key] = value
         }
+    }
+
+    private fun submissionCounter(type: String) =
+        meterRegistry.counter(
+            "job.submissions.total",
+            "type",
+            type, // Tag: 任务类型 (compilation 或 execution)
+        )
+
+    private fun logCurrentTrace(where: String) {
+        val sc = Span.current().spanContext
+        logger.info(
+            "otel where={} traceId={} spanId={} sampled={}",
+            where,
+            sc.traceId,
+            sc.spanId,
+            sc.isSampled,
+        )
+    }
+
+    private suspend fun <T : Any> sendWithTracing(
+        operation: String,
+        exchange: String,
+        routingKey: String,
+        payload: T,
+        jobIdAttr: String? = null,
+        customize: (org.springframework.amqp.core.Message) -> org.springframework.amqp.core.Message,
+    ) {
+        val parentCtx = Context.current()
+
+        withContext(Dispatchers.IO + parentCtx.asContextElement()) {
+            val span =
+                tracer
+                    .spanBuilder("amqp.publish.$operation")
+                    .setSpanKind(SpanKind.PRODUCER)
+                    .setParent(parentCtx)
+                    .setAttribute(AttributeKey.stringKey("messaging.system"), "rabbitmq")
+                    .setAttribute(AttributeKey.stringKey("messaging.destination.name"), routingKey)
+                    .setAttribute(AttributeKey.stringKey("messaging.operation"), "publish")
+                    .apply {
+                        if (jobIdAttr != null)
+                            setAttribute(AttributeKey.stringKey("app.job_id"), jobIdAttr)
+                    }
+                    .startSpan()
+
+            try {
+                (span.makeCurrent()).use {
+                    logCurrentTrace("publish.$operation.beforeInject")
+
+                    rabbitTemplate.convertAndSend(exchange, routingKey, payload) { msg ->
+                        val customized = customize(msg)
+
+                        propagators.textMapPropagator.inject(
+                            Context.current(),
+                            customized.messageProperties,
+                            AmqpSetter,
+                        )
+
+                        val tp = customized.messageProperties.headers["traceparent"]
+                        logger.info("amqp headers after inject: traceparent={}", tp)
+
+                        logCurrentTrace("publish.$operation.afterInject")
+                        customized
+                    }
+                    span.setStatus(StatusCode.OK)
+                }
+            } catch (e: Exception) {
+                span.recordException(e)
+                span.setStatus(StatusCode.ERROR, e.message ?: "amqp publish error")
+                throw e
+            } finally {
+                span.end()
+            }
+        }
+    }
 
     /**
      * Submits a new compilation task. Creates a record in the database and sends a message to the
@@ -69,22 +150,29 @@ class JobSubmitService(
      * @throws RuntimeException for other unexpected errors.
      */
     @Transactional
-    @WithSpan("job.submit.compilation")
     suspend fun submitCompilation(
         userId: Long,
         sourceCodeStream: InputStream,
         sourceCodeSize: Long,
-    ): CompilationJob {
-        val jobId = UUID.randomUUID()
-        val submitTime = Instant.now()
-        // Define the object key for the source code in MinIO
-        val sourceCodeObjectKey = "sources/$userId/$jobId/source.cpp" // Example key structure
+    ): CompilationJob =
+        tracer.withSuspendingSpan("job.submit.compilation") {
+            logCurrentTrace("submitCompilation.entry")
 
-        // 1. Upload Source Code to MinIO first
-        val uploadSuccess =
-            try {
-                withContext(Dispatchers.IO) {
-                    tracer.withSuspendingSpan("minio.upload_source_on_submit") {
+            submissionCounter("compilation").increment()
+
+            val jobId = UUID.randomUUID()
+            val submitTime = Instant.now()
+            // Define the object key for the source code in MinIO
+            val sourceCodeObjectKey = "sources/$userId/$jobId/source.cpp" // Example key structure
+
+            // 1. Upload Source Code to MinIO first
+            val uploadSuccess =
+                try {
+                    tracer.withSuspendingSpan(
+                        "minio.upload_source_on_submit",
+                        kind = SpanKind.CLIENT,
+                        ctx = Dispatchers.IO,
+                    ) {
                         minioService.uploadStream(
                             objectKey = sourceCodeObjectKey,
                             inputStream = sourceCodeStream,
@@ -92,161 +180,162 @@ class JobSubmitService(
                             contentType = "text/plain", // Or "text/x-c++src" etc.
                         )
                     }
+                } catch (e: Exception) {
+                    logger.error(
+                        "Failed to upload source code to MinIO for potential job $jobId (user $userId)",
+                        e,
+                    )
+                    // If upload fails, we cannot proceed. Throw an exception that leads to API
+                    // error
+                    // response.
+                    throw RuntimeException("Failed to store source code before submitting job", e)
+                } finally {
+                    // Important: Ensure the stream provided by MultipartFile is closed if necessary
+                    // Spring might handle this, but defensive closing is good if unsure.
+                    try {
+                        withContext(Dispatchers.IO + Context.current().asContextElement()) {
+                            sourceCodeStream.close()
+                        }
+                    } catch (_: Exception) {}
                 }
-            } catch (e: Exception) {
-                logger.error(
-                    "Failed to upload source code to MinIO for potential job $jobId (user $userId)",
-                    e,
-                )
-                // If upload fails, we cannot proceed. Throw an exception that leads to API error
-                // response.
-                throw RuntimeException("Failed to store source code before submitting job", e)
-            } finally {
-                // Important: Ensure the stream provided by MultipartFile is closed if necessary
-                // Spring might handle this, but defensive closing is good if unsure.
-                try {
-                    withContext(Dispatchers.IO) { sourceCodeStream.close() }
-                } catch (_: Exception) {}
+
+            if (!uploadSuccess) {
+                // Should be caught by the try-catch above, but double-check
+                throw RuntimeException("MinIO upload returned failure for source code")
             }
+            logger.info("Uploaded source code for job {} to MinIO: {}", jobId, sourceCodeObjectKey)
 
-        if (!uploadSuccess) {
-            // Should be caught by the try-catch above, but double-check
-            throw RuntimeException("MinIO upload returned failure for source code")
-        }
-        logger.info("Uploaded source code for job {} to MinIO: {}", jobId, sourceCodeObjectKey)
+            // 2. Create Job Entity with the reference
+            val compilationJob =
+                CompilationJob(
+                    jobId = jobId,
+                    userId = userId,
+                    status = JobStatus.PENDING,
+                    submitTime = submitTime,
+                    sourceCodeRef = sourceCodeObjectKey, // Store the MinIO key
+                )
 
-        // 2. Create Job Entity with the reference
-        val compilationJob =
-            CompilationJob(
-                jobId = jobId,
-                userId = userId,
-                status = JobStatus.PENDING,
-                submitTime = submitTime,
-                sourceCodeRef = sourceCodeObjectKey, // Store the MinIO key
+            // 3. Save to Database
+            val savedJob: CompilationJob =
+                try {
+                    tracer.withSuspendingSpan("db.save_compilation_job", ctx = Dispatchers.IO) {
+                        compilationJobRepository.save(compilationJob)
+                    }
+                } catch (e: DataAccessException) {
+                    logger.error(
+                        "Failed to save compilation job {} to database for user {}: {}",
+                        jobId,
+                        userId,
+                        e.message,
+                    )
+                    // Consider deleting the uploaded source from MinIO if DB save fails
+                    // (compensation
+                    // logic)
+                    try {
+                        minioService.deleteObject(sourceCodeObjectKey)
+                    } catch (_: Exception) {
+                        /* Log delete failure */
+                    }
+                    throw e
+                } catch (e: Exception) {
+                    logger.error(
+                        "Unexpected error saving compilation job {} for user {}: {}",
+                        jobId,
+                        userId,
+                        e.message,
+                        e,
+                    )
+                    try {
+                        minioService.deleteObject(sourceCodeObjectKey)
+                    } catch (_: Exception) {
+                        /* Log delete failure */
+                    }
+                    throw RuntimeException(
+                        "Unexpected error during DB save for compilation job $jobId",
+                        e,
+                    )
+                }
+            logger.info(
+                "Saved compilation job {} with sourceRef '{}' and status PENDING",
+                jobId,
+                sourceCodeObjectKey,
             )
 
-        // 3. Save to Database
-        val savedJob: CompilationJob =
+            jobFlowService.getJobFlow(savedJob.jobId) // Ensure flow exists
+            jobFlowService.publishEvent(
+                savedJob.jobId,
+                JobSseEvent(
+                    jobId = savedJob.jobId.toString(),
+                    eventType = "SUBMITTED",
+                    status = JobStatus.SUBMITTED, // Or PENDING if not updating DB here
+                    message = "Compilation job submitted.",
+                ),
+            )
+
+            // 4. Create AMQP Request DTO (now contains the reference)
+            val request =
+                CompilationRequest(
+                    jobId = jobId.toString(),
+                    userId = userId,
+                    sourceCodeRef = sourceCodeObjectKey, // Pass the reference
+                    timestamp = submitTime,
+                )
+
+            // 5. Send to RabbitMQ
             try {
-                withContext(Dispatchers.IO) { compilationJobRepository.save(compilationJob) }
-            } catch (e: DataAccessException) {
-                logger.error(
-                    "Failed to save compilation job {} to database for user {}: {}",
-                    jobId,
-                    userId,
-                    e.message,
-                )
-                // Consider deleting the uploaded source from MinIO if DB save fails (compensation
-                // logic)
-                try {
-                    minioService.deleteObject(sourceCodeObjectKey)
-                } catch (_: Exception) {
-                    /* Log delete failure */
-                }
-                throw e
-            } catch (e: Exception) {
-                logger.error(
-                    "Unexpected error saving compilation job {} for user {}: {}",
-                    jobId,
-                    userId,
-                    e.message,
-                    e,
-                )
-                try {
-                    minioService.deleteObject(sourceCodeObjectKey)
-                } catch (_: Exception) {
-                    /* Log delete failure */
-                }
-                throw RuntimeException(
-                    "Unexpected error during DB save for compilation job $jobId",
-                    e,
-                )
-            }
-        logger.info(
-            "Saved compilation job {} with sourceRef '{}' and status PENDING",
-            jobId,
-            sourceCodeObjectKey,
-        )
-
-        jobFlowService.getJobFlow(savedJob.jobId) // Ensure flow exists
-        jobFlowService.publishEvent(
-            savedJob.jobId,
-            JobSseEvent(
-                jobId = savedJob.jobId.toString(),
-                eventType = "SUBMITTED",
-                status = JobStatus.SUBMITTED, // Or PENDING if not updating DB here
-                message = "Compilation job submitted.",
-            ),
-        )
-
-        // 4. Create AMQP Request DTO (now contains the reference)
-        val request =
-            CompilationRequest(
-                jobId = jobId.toString(),
-                userId = userId,
-                sourceCodeRef = sourceCodeObjectKey, // Pass the reference
-                timestamp = submitTime,
-            )
-
-        // 5. Send to RabbitMQ
-        try {
-            withContext(Dispatchers.IO) {
-                rabbitTemplate.convertAndSend(requestsExchangeName, compileRoutingKey, request) {
-                    message ->
+                sendWithTracing(
+                    operation = "compile",
+                    exchange = requestsExchangeName,
+                    routingKey = compileRoutingKey,
+                    payload = request,
+                    jobIdAttr = jobId.toString(),
+                ) { message ->
                     message.messageProperties.correlationId = jobId.toString()
                     message.messageProperties.headers[AmqpConstants.HEADER_MESSAGE_TYPE] =
                         AmqpConstants.MESSAGE_TYPE_COMPILE
-
-                    propagators.textMapPropagator.inject(
-                        Context.current(),
-                        message.messageProperties,
-                        rabbitMqSetter,
-                    )
-
                     message
                 }
-            }
-            logger.info(
-                "Sent compilation request for job {} to exchange '{}'",
-                jobId,
-                requestsExchangeName,
-            )
+                logger.info(
+                    "Sent compilation request for job {} to exchange '{}'",
+                    jobId,
+                    requestsExchangeName,
+                )
 
-            // Optional: Update DB status to SUBMITTED
-            // ... (same logic as before, update savedJob status and save again) ...
+                // Optional: Update DB status to SUBMITTED
+                // ... (same logic as before, update savedJob status and save again) ...
 
-        } catch (e: AmqpException) {
-            logger.error(
-                "Failed to send compilation request for job {} to RabbitMQ: {}",
-                jobId,
-                e.message,
-            )
-            // If DB save succeeded but MQ failed, flow exists but job won't process.
-            // Publish an error event?
-            savedJob.let {
-                jobFlowService.publishError(it.jobId, "Failed to send job to processing queue.")
+            } catch (e: AmqpException) {
+                logger.error(
+                    "Failed to send compilation request for job {} to RabbitMQ: {}",
+                    jobId,
+                    e.message,
+                )
+                // If DB save succeeded but MQ failed, flow exists but job won't process.
+                // Publish an error event?
+                savedJob.let {
+                    jobFlowService.publishError(it.jobId, "Failed to send job to processing queue.")
+                }
+                // Transaction will rollback DB save. The uploaded MinIO object remains (orphan).
+                // Requires more complex cleanup/compensation logic if strict consistency is needed.
+                throw e
+            } catch (e: Exception) {
+                logger.error(
+                    "Unexpected error sending compilation request for job {} to RabbitMQ: {}",
+                    jobId,
+                    e.message,
+                    e,
+                )
+                savedJob.let {
+                    jobFlowService.publishError(it.jobId, "Unexpected error during job submission.")
+                }
+                throw RuntimeException(
+                    "Unexpected error during AMQP send for compilation job $jobId",
+                    e,
+                )
             }
-            // Transaction will rollback DB save. The uploaded MinIO object remains (orphan).
-            // Requires more complex cleanup/compensation logic if strict consistency is needed.
-            throw e
-        } catch (e: Exception) {
-            logger.error(
-                "Unexpected error sending compilation request for job {} to RabbitMQ: {}",
-                jobId,
-                e.message,
-                e,
-            )
-            savedJob.let {
-                jobFlowService.publishError(it.jobId, "Unexpected error during job submission.")
-            }
-            throw RuntimeException(
-                "Unexpected error during AMQP send for compilation job $jobId",
-                e,
-            )
+
+            savedJob
         }
-
-        return savedJob
-    }
 
     /**
      * Submits a batch of execution tasks. Creates records in the database and sends messages to the
@@ -258,34 +347,60 @@ class JobSubmitService(
      * @return A map where Key is the clientRequestId (or generated jobId if null) and Value is a
      *   Result indicating success (Ok containing jobId) or failure (Err containing error message).
      */
-    @WithSpan("job.submit.batch_execution")
     suspend fun submitBatchExecution(
         requests: List<BatchExecutionItem>,
         finalSessionId: String,
         requestingUserId: Long,
-    ): Map<String, Result<String>> {
-        val results = mutableMapOf<String, Result<String>>()
-        val submittedJobIds = mutableListOf<UUID>()
+    ): Map<String, Result<String>> =
+        tracer.withSuspendingSpan("job.submit.batch_execution") {
+            val results = mutableMapOf<String, Result<String>>()
+            val submittedJobIds = mutableListOf<UUID>()
 
-        requests.forEachIndexed { index, item ->
-            // Use clientRequestId if available, otherwise generate a temporary key for the result
-            // map
-            val resultKey = item.clientRequestId ?: "batch_item_${index}_${UUID.randomUUID()}"
-            var submittedJobId: UUID? = null
-            try {
-                // Call a separate transactional method for each item
-                val executionJob =
-                    submitSingleExecutionInternal(item, finalSessionId, requestingUserId)
-                submittedJobId = executionJob.jobId
-                jobFlowService.getJobFlow(submittedJobId)
-                jobFlowService.publishEvent(
-                    submittedJobId,
-                    JobSseEvent(
-                        jobId = submittedJobId.toString(),
-                        eventType = "SUBMITTED",
-                        status = JobStatus.SUBMITTED, // Assuming internal method updates status
-                        message = "Execution job submitted.",
-                        data =
+            requests.forEachIndexed { index, item ->
+                // Use clientRequestId if available, otherwise generate a temporary key for the
+                // result
+                // map
+                val resultKey = item.clientRequestId ?: "batch_item_${index}_${UUID.randomUUID()}"
+                var submittedJobId: UUID? = null
+                try {
+                    // Call a separate transactional method for each item
+                    val executionJob =
+                        submitSingleExecutionInternal(item, finalSessionId, requestingUserId)
+                    submittedJobId = executionJob.jobId
+                    jobFlowService.getJobFlow(submittedJobId)
+                    jobFlowService.publishEvent(
+                        submittedJobId,
+                        JobSseEvent(
+                            jobId = submittedJobId.toString(),
+                            eventType = "SUBMITTED",
+                            status = JobStatus.SUBMITTED, // Assuming internal method updates status
+                            message = "Execution job submitted.",
+                            data =
+                                mapOf(
+                                    "userId" to item.userId,
+                                    "clientRequestId" to item.clientRequestId,
+                                    "tickNumber" to item.tickNumber,
+                                    "sessionId" to finalSessionId,
+                                    "requestingUserId" to requestingUserId,
+                                ),
+                            sessionId = finalSessionId,
+                        ),
+                    )
+                    results[resultKey] =
+                        Result.success(submittedJobId.toString()) // Return success with jobId
+                    submittedJobIds.add(submittedJobId)
+                } catch (e: Exception) {
+                    // Catch exceptions from the internal submission method (DB or AMQP failures)
+                    logger.error(
+                        "Failed to submit batch execution item (User: {}, ClientReqId: {}): {}",
+                        item.userId,
+                        item.clientRequestId ?: "N/A",
+                        e.message,
+                    )
+                    submittedJobId?.let { failedJobId ->
+                        jobFlowService.publishError(
+                            failedJobId,
+                            "Failed during submission process: ${e.message}",
                             mapOf(
                                 "userId" to item.userId,
                                 "clientRequestId" to item.clientRequestId,
@@ -293,39 +408,14 @@ class JobSubmitService(
                                 "sessionId" to finalSessionId,
                                 "requestingUserId" to requestingUserId,
                             ),
-                        sessionId = finalSessionId,
-                    ),
-                )
-                results[resultKey] =
-                    Result.success(submittedJobId.toString()) // Return success with jobId
-                submittedJobIds.add(submittedJobId)
-            } catch (e: Exception) {
-                // Catch exceptions from the internal submission method (DB or AMQP failures)
-                logger.error(
-                    "Failed to submit batch execution item (User: {}, ClientReqId: {}): {}",
-                    item.userId,
-                    item.clientRequestId ?: "N/A",
-                    e.message,
-                )
-                submittedJobId?.let { failedJobId ->
-                    jobFlowService.publishError(
-                        failedJobId,
-                        "Failed during submission process: ${e.message}",
-                        mapOf(
-                            "userId" to item.userId,
-                            "clientRequestId" to item.clientRequestId,
-                            "tickNumber" to item.tickNumber,
-                            "sessionId" to finalSessionId,
-                            "requestingUserId" to requestingUserId,
-                        ),
-                        sessionId = finalSessionId,
-                    )
+                            sessionId = finalSessionId,
+                        )
+                    }
+                    results[resultKey] = Result.failure(e) // Return failure with exception
                 }
-                results[resultKey] = Result.failure(e) // Return failure with exception
             }
+            results
         }
-        return results
-    }
 
     /**
      * Submits a single execution job, persisting it and sending the execution request to RabbitMQ
@@ -346,6 +436,10 @@ class JobSubmitService(
         finalSessionId: String,
         requestingUserId: Long,
     ): ExecutionJob {
+        logCurrentTrace("submitSingleExecution.entry")
+
+        submissionCounter("execution").increment()
+
         val jobId = UUID.randomUUID()
         val submitTime = Instant.now()
 
@@ -370,7 +464,9 @@ class JobSubmitService(
         // 2. Save to Database
         val savedJob: ExecutionJob =
             try {
-                withContext(Dispatchers.IO) { executionJobRepository.save(executionJob) }
+                tracer.withSuspendingSpan("db.save_execution_job", ctx = Dispatchers.IO) {
+                    executionJobRepository.save(executionJob)
+                }
             } catch (e: DataAccessException) {
                 logger.error(
                     "Failed to save execution job {} to database for user {}: {}",
@@ -413,26 +509,22 @@ class JobSubmitService(
 
         // 4. Send to RabbitMQ
         try {
-            withContext(Dispatchers.IO) {
-                rabbitTemplate.convertAndSend(requestsExchangeName, executeRoutingKey, request) {
-                    message ->
-                    message.messageProperties.correlationId = jobId.toString()
-                    message.messageProperties.headers[AmqpConstants.HEADER_MESSAGE_TYPE] =
-                        AmqpConstants.MESSAGE_TYPE_EXECUTE
-
-                    item.clientRequestId?.let {
-                        message.messageProperties.headers["clientRequestId"] = it
-                    }
-
-                    propagators.textMapPropagator.inject(
-                        Context.current(),
-                        message.messageProperties,
-                        rabbitMqSetter,
-                    )
-
-                    message
+            sendWithTracing(
+                operation = "execute",
+                exchange = requestsExchangeName,
+                routingKey = executeRoutingKey,
+                payload = request,
+                jobIdAttr = jobId.toString(),
+            ) { message ->
+                message.messageProperties.correlationId = jobId.toString()
+                message.messageProperties.headers[AmqpConstants.HEADER_MESSAGE_TYPE] =
+                    AmqpConstants.MESSAGE_TYPE_EXECUTE
+                item.clientRequestId?.let {
+                    message.messageProperties.headers["clientRequestId"] = it
                 }
+                message
             }
+
             logger.info(
                 "Sent execution request for job {} to exchange '{}' with routing key '{}'",
                 jobId,

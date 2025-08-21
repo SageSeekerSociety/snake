@@ -1,5 +1,8 @@
 package org.rucca.snake.worker.infra.amqp
 
+import io.opentelemetry.api.OpenTelemetry
+import io.opentelemetry.context.Context
+import io.opentelemetry.context.propagation.TextMapSetter
 import java.time.Instant
 import java.util.*
 import kotlinx.coroutines.Dispatchers
@@ -11,6 +14,7 @@ import org.rucca.snake.common.domain.model.ExecutionResultNotification
 import org.rucca.snake.common.domain.model.JobStatus
 import org.slf4j.LoggerFactory
 import org.springframework.amqp.AmqpException
+import org.springframework.amqp.core.MessageProperties
 import org.springframework.amqp.rabbit.core.RabbitTemplate
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
@@ -18,10 +22,17 @@ import org.springframework.stereotype.Service
 @Service
 class ResultNotifier(
     private val rabbitTemplate: RabbitTemplate,
+    openTelemetry: OpenTelemetry,
     @Value("\${amqp.exchange.results}") private val resultsExchangeName: String,
     @Value("\${amqp.routingkey.result}") private val resultRoutingKey: String,
 ) {
     private val logger = LoggerFactory.getLogger(ResultNotifier::class.java)
+    private val propagators = openTelemetry.propagators
+
+    // 创建一个 TextMapSetter 实例，用于操作 MessageProperties
+    private val rabbitMqSetter = TextMapSetter<MessageProperties> { carrier, key, value ->
+        carrier?.headers?.put(key, value)
+    }
 
     suspend fun notifyCompilationResult(
         jobId: UUID,
@@ -59,8 +70,9 @@ class ResultNotifier(
                     message.messageProperties.correlationId = jobId // Use original jobId
                     message.messageProperties.headers[AmqpConstants.HEADER_MESSAGE_TYPE] =
                         messageType
-                    // Notifications might not need persistence? Or make it configurable.
-                    // message.messageProperties.deliveryMode = MessageDeliveryMode.NON_PERSISTENT
+
+                    propagators.textMapPropagator.inject(Context.current(), message.messageProperties, rabbitMqSetter)
+
                     message
                 }
             }

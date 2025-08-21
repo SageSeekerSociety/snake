@@ -2,6 +2,10 @@ package org.rucca.snake.controller.infra.amqp
 
 import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.databind.ObjectMapper
+import io.opentelemetry.api.OpenTelemetry
+import io.opentelemetry.context.Context
+import io.opentelemetry.context.propagation.TextMapGetter
+import io.opentelemetry.extension.kotlin.asContextElement
 import io.opentelemetry.instrumentation.annotations.WithSpan
 import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
@@ -22,6 +26,7 @@ import org.rucca.snake.controller.domain.service.PlayerUpdateService
 import org.slf4j.LoggerFactory
 import org.springframework.amqp.core.AcknowledgeMode
 import org.springframework.amqp.core.Message
+import org.springframework.amqp.core.MessageProperties
 import org.springframework.amqp.rabbit.connection.ConnectionFactory
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer
 import org.springframework.amqp.rabbit.listener.api.ChannelAwareMessageListener
@@ -40,10 +45,20 @@ class ResultListener(
     private val jobFlowService: JobFlowService,
     private val jobQueryService: JobQueryService,
     private val connectionFactory: ConnectionFactory,
+    openTelemetry: OpenTelemetry,
     @Value("\${amqp.queue.results:oj.results.notify}") private val queueName: String,
     @Value("\${amqp.listener.prefetch:10}") private val prefetchCount: Int,
 ) {
     private val logger = LoggerFactory.getLogger(ResultListener::class.java)
+    private val propagators = openTelemetry.propagators
+
+    private val rabbitMqGetter =
+        object : TextMapGetter<MessageProperties> {
+            override fun keys(carrier: MessageProperties): Iterable<String> = carrier.headers.keys
+
+            override fun get(carrier: MessageProperties?, key: String): String? =
+                carrier?.headers?.get(key)?.toString()
+        }
 
     private val scope =
         CoroutineScope(Dispatchers.Default + SupervisorJob() + CoroutineName("ResultListenerScope"))
@@ -61,7 +76,13 @@ class ResultListener(
         // Creates a Kotlin Flow from the callback-based message listener.
         val messageFlow = callbackFlow {
             val listener = ChannelAwareMessageListener { message, channel ->
-                trySend(message to channel!!)
+                val extractedContext =
+                    propagators.textMapPropagator.extract(
+                        Context.current(),
+                        message.messageProperties,
+                        rabbitMqGetter,
+                    )
+                trySend(Triple(message, channel!!, extractedContext))
             }
             container.setMessageListener(listener)
 
@@ -77,25 +98,26 @@ class ResultListener(
 
         // Launches a long-running coroutine to consume and process messages from the flow.
         messageFlow
-            .onEach { (message, channel) -> // Process each message concurrently.
-                val deliveryTag = message.messageProperties.deliveryTag
-                val correlationId = message.messageProperties.correlationId
-                try {
-                    processMessageInternal(message)
-                    channel.basicAck(deliveryTag, false) // `false` for single message ack.
-                    logger.debug(
-                        "Successfully processed and ACKed message for job {}",
-                        correlationId,
-                    )
-                } catch (e: Exception) {
-                    logger.error(
-                        "Failed to process message for job {}. NACKing. Error: {}",
-                        correlationId,
-                        e.message,
-                        e,
-                    )
-                    // `requeue=false`: discard message or route to Dead Letter Queue if configured.
-                    channel.basicNack(deliveryTag, false, false)
+            .onEach { (message, channel, extractedContext) -> // Process each message concurrently.
+                withContext(extractedContext.asContextElement()) {
+                    val deliveryTag = message.messageProperties.deliveryTag
+                    val correlationId = message.messageProperties.correlationId
+                    try {
+                        processMessageInternal(message)
+                        channel.basicAck(deliveryTag, false) // `false` for single message ack.
+                        logger.debug(
+                            "Successfully processed and ACKed message for job {}",
+                            correlationId,
+                        )
+                    } catch (e: Exception) {
+                        logger.error(
+                            "Failed to process message for job $correlationId. NACKing.",
+                            e,
+                        )
+                        // `requeue=false`: discard message or route to Dead Letter Queue if
+                        // configured.
+                        channel.basicNack(deliveryTag, false, false)
+                    }
                 }
             }
             .launchIn(scope)
