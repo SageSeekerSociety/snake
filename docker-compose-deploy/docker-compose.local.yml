@@ -264,7 +264,7 @@ services:
       - loki_data:/loki
     command: -config.file=/etc/loki/local-config.yaml
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3100/ready"]
+      test: ["CMD-SHELL","wget -qO- http://localhost:3100/ready | grep -q 'ready'"]
       start_period: 60s
       interval: 10s
       timeout: 5s
