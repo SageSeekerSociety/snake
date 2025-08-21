@@ -30,35 +30,49 @@ scrape_configs:
         target_label: __path__     # 必须把 log_path relabel 到 __path__
 
     pipeline_stages:
-      # 1) 先把 Docker 外层 JSON 拆开（把 .log 里的内层日志放到当前行）
-      - docker: {}  # 解析标准 Docker 日志行。:contentReference[oaicite:1]{index=1}
+      # 1) 解析 Docker 的外层 JSON
+      - docker: {}
 
-      # 2) 解析“应用内层 JSON”
+      # 2) 合并多行日志（如 Java 堆栈跟踪）
+      #    新日志行以时间戳或 '{' (JSON) 开头
+      - multiline:
+          firstline: '^\d{4}-\d{2}-\d{2}|^{'
+          max_wait_time: 3s
+
+      # 3) 优先尝试按 JSON 解析
       - json:
-          # 不要写 source: log —— 默认就是解析当前行。
           expressions:
-            ts:         '"@timestamp"'   # 带 @ 的键名必须用引号包起来（JMESPath）
-            level:      level
-            logger:     logger_name
-            thread:     thread_name
-            message:    message
-            trace:      trace_id
-            span:       span_id
-            stack:      stack_trace
-          drop_malformed: true
+            ts: '"@timestamp"'
+            level: level
+            logger: logger_name
+            message: message
+            trace: trace_id
+            span: span_id
+          # 如果不是 JSON，不丢弃，日志将保持原样进入下一阶段
+          drop_malformed: false
 
-      # 3) 用应用里的时间戳当 Loki 的时间（可选但推荐）
+      # 4) 如果 JSON 解析失败，则回退到用 正则表达式(Regex) 解析
+      #    这个 Regex 只会在 "message" 字段不存在时生效
+      - regex:
+          expression: '^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\s+(?P<level>\w+)\s+.*?\s+:\s(?P<message>.*)$'
+
+      # 5) 统一处理时间戳
+      #    如果 ts 字段存在（来自JSON或Regex），则用它作为Loki时间戳
       - timestamp:
           source: ts
-          format: RFC3339Nano           # 你的 @timestamp 看起来是 ISO/RFC3339。:contentReference[oaicite:2]{index=2}
+          formats:
+            - RFC3339Nano
+            - "2006-01-02 15:04:05.999"
+          action_on_failure: skip # 如果没有可用的 ts，则跳过
 
-      # 4) 提升关键字段为标签，便于查询
+      # 6) 统一提升关键字段为标签
       - labels:
           level:
           logger:
           trace:
           span:
 
-      # 5) 让面板里的“Line”显示 message（不是整坨 JSON）
+      # 7) 统一输出格式
+      #    使用 message 字段作为最终的日志行
       - output:
-          source: message               # 将提取的 message 作为最终日志行。:contentReference[oaicite:3]{index=3}
+          source: message
