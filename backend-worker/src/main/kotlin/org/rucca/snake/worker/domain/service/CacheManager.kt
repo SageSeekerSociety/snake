@@ -7,7 +7,6 @@ import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Timer
 import io.opentelemetry.api.OpenTelemetry
 import io.opentelemetry.api.trace.Span
-import io.opentelemetry.instrumentation.annotations.WithSpan
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -125,10 +124,7 @@ class CacheManager(
     }
 
     suspend fun getProgramPath(userId: Long, objectKey: String): Path? =
-        tracer.withSuspendingSpan(
-            "cache.get_program_path",
-            ctx = Dispatchers.IO
-        ) {
+        tracer.withSuspendingSpan("cache.get_program_path", ctx = Dispatchers.IO) {
             val timerSample = Timer.start(meterRegistry)
             try {
                 // annotate method span with identifiers useful for debugging
@@ -155,7 +151,8 @@ class CacheManager(
                 inFlightDownloads[key]?.let { existing ->
                     val waitSample = Timer.start(meterRegistry)
                     try {
-                        val res = tracer.withSuspendingSpan("cache.download.await") { existing.await() }
+                        val res =
+                            tracer.withSuspendingSpan("cache.download.await") { existing.await() }
                         incOutcome("coalesced")
                         Span.current().setAttribute("cache.outcome", "coalesced")
                         timerSample.stop(getTimer)
@@ -214,7 +211,7 @@ class CacheManager(
                                         val lm = safeGetLastModified(localPath)
                                         if (
                                             lm != null &&
-                                            lm.isAfter(Instant.now().minus(staleTolerance))
+                                                lm.isAfter(Instant.now().minus(staleTolerance))
                                         ) {
                                             logger.warn(
                                                 "Remote stat failed; using locally cached '{}' within stale tolerance.",
@@ -273,7 +270,7 @@ class CacheManager(
                                         val lm = safeGetLastModified(localPath)
                                         if (
                                             lm != null &&
-                                            lm.isAfter(Instant.now().minus(staleTolerance))
+                                                lm.isAfter(Instant.now().minus(staleTolerance))
                                         ) {
                                             incOutcome("fallback_download_failed")
                                             Span.current()

@@ -6,7 +6,6 @@ import io.opentelemetry.api.OpenTelemetry
 import io.opentelemetry.context.Context
 import io.opentelemetry.context.propagation.TextMapGetter
 import io.opentelemetry.extension.kotlin.asContextElement
-import io.opentelemetry.instrumentation.annotations.WithSpan
 import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
 import java.util.*
@@ -145,9 +144,7 @@ class ResultListener(
      * @throws Exception if processing fails, allowing the caller to NACK the message.
      */
     private suspend fun processMessageInternal(message: Message) =
-        tracer.withSuspendingSpan(
-            "job.result.process"
-        ) {
+        tracer.withSuspendingSpan("job.result.process") {
             val messageBody = String(message.body, Charsets.UTF_8)
             val correlationId = message.messageProperties.correlationId
             val messageType =
@@ -177,10 +174,13 @@ class ResultListener(
             when (messageType) {
                 AmqpConstants.MESSAGE_TYPE_COMPILE_RESULT -> {
                     val notification =
-                        objectMapper.readValue(messageBody, CompilationResultNotification::class.java)
+                        objectMapper.readValue(
+                            messageBody,
+                            CompilationResultNotification::class.java,
+                        )
                     if (
                         notification.status == JobStatus.SUCCESS &&
-                        notification.compiledProgramRef != null
+                            notification.compiledProgramRef != null
                     ) {
                         playerUpdateService.updatePlayerOnCompileSuccess(
                             userId = notification.userId.toInt(),
@@ -193,7 +193,9 @@ class ResultListener(
                     // Fetch full data for compilation as it's less frequent and has fewer fields
                     val finalResultDto =
                         jobQueryService.getJobStatusAndResult(jobUUID)
-                            ?: throw RuntimeException("Job record not found in DB for job ID: $jobUUID")
+                            ?: throw RuntimeException(
+                                "Job record not found in DB for job ID: $jobUUID"
+                            )
 
                     val eventData: Map<String, Any?> =
                         objectMapper.convertValue(

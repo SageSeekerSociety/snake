@@ -112,7 +112,8 @@ class CompileService(
 
                 // Execute Compilation
                 val compileResult = executeCompileCommand(sourceFilePath, outputFilePath)
-                compileOutputText = compileResult.output // Store compiler output regardless of success
+                compileOutputText =
+                    compileResult.output // Store compiler output regardless of success
 
                 if (!compileResult.success) {
                     logger.warn(
@@ -194,82 +195,85 @@ class CompileService(
     private suspend fun executeCompileCommand(
         sourceFile: Path,
         outputFile: Path,
-    ): CompileCommandResult = tracer.withSuspendingSpan("compile.command.execute") {
-        val compilerPath = applicationConfig.compilerPath
-        val compilerParameters = applicationConfig.compilerParameter
-        val command = mutableListOf(compilerPath)
-        command.addAll(compilerParameters)
-        command.add(sourceFile.toAbsolutePath().toString())
-        command.add("-o")
-        command.add(outputFile.toAbsolutePath().toString())
+    ): CompileCommandResult =
+        tracer.withSuspendingSpan("compile.command.execute") {
+            val compilerPath = applicationConfig.compilerPath
+            val compilerParameters = applicationConfig.compilerParameter
+            val command = mutableListOf(compilerPath)
+            command.addAll(compilerParameters)
+            command.add(sourceFile.toAbsolutePath().toString())
+            command.add("-o")
+            command.add(outputFile.toAbsolutePath().toString())
 
-        logger.info("Executing compile command: {}", command.joinToString(" "))
+            logger.info("Executing compile command: {}", command.joinToString(" "))
 
-        var processOutput = ""
-        var exitCode = -1
+            var processOutput = ""
+            var exitCode = -1
 
-        try {
-            // Run compilation within IO context and with a timeout
-            withTimeout(TimeUnit.SECONDS.toMillis(compileTimeoutSeconds)) {
-                withContext(Dispatchers.IO) {
-                    val processBuilder = ProcessBuilder(command)
-                    processBuilder.redirectErrorStream(true) // Merge stdout and stderr
-                    val process = processBuilder.start()
+            try {
+                // Run compilation within IO context and with a timeout
+                withTimeout(TimeUnit.SECONDS.toMillis(compileTimeoutSeconds)) {
+                    withContext(Dispatchers.IO) {
+                        val processBuilder = ProcessBuilder(command)
+                        processBuilder.redirectErrorStream(true) // Merge stdout and stderr
+                        val process = processBuilder.start()
 
-                    // Read output asynchronously to prevent buffer blocking
-                    val outputGobbler =
-                        CoroutineScope(Dispatchers.IO).async {
-                            process.inputStream.bufferedReader().use { it.readText() }
-                        }
+                        // Read output asynchronously to prevent buffer blocking
+                        val outputGobbler =
+                            CoroutineScope(Dispatchers.IO).async {
+                                process.inputStream.bufferedReader().use { it.readText() }
+                            }
 
-                    exitCode = process.waitFor() // Wait for process completion
-                    processOutput = outputGobbler.await() // Get the full output
-                    logger.debug(
-                        "Compile process for {} finished with exit code {}. Output:\n{}",
-                        sourceFile,
-                        exitCode,
-                        processOutput.take(500),
-                    )
-                    //                    exitCode == 0 // Return success status
+                        exitCode = process.waitFor() // Wait for process completion
+                        processOutput = outputGobbler.await() // Get the full output
+                        logger.debug(
+                            "Compile process for {} finished with exit code {}. Output:\n{}",
+                            sourceFile,
+                            exitCode,
+                            processOutput.take(500),
+                        )
+                        //                    exitCode == 0 // Return success status
+                    }
                 }
-            }
 
-            CompileCommandResult(
-                exitCode = exitCode,
-                output = processOutput,
-                success = (exitCode == 0),
-            )
-        } catch (_: TimeoutCancellationException) {
-            // Catch the specific exception from withTimeout
-            logger.warn("Compilation command timed out for source file: {}", sourceFile)
-            // Throw *our* custom exception to signal timeout clearly to the caller
-            throw CompilationTimeoutException("Compilation exceeded $compileTimeoutSeconds seconds")
-        } catch (ioe: IOException) {
-            logger.error(
-                "IOException during compilation command execution for {}: {}",
-                sourceFile,
-                ioe.message,
-            )
-            CompileCommandResult(
-                exitCode = -1,
-                output = "Failed to start compiler: ${ioe.message}",
-                success = false,
-            )
-        } catch (e: Exception) {
-            // Catch other potential exceptions from process handling
-            logger.error(
-                "Exception during compilation command execution for {}: {}",
-                sourceFile,
-                e.message,
-                e,
-            )
-            CompileCommandResult(
-                exitCode = -1,
-                output = "Internal error during compilation: ${e.message}",
-                success = false,
-            )
+                CompileCommandResult(
+                    exitCode = exitCode,
+                    output = processOutput,
+                    success = (exitCode == 0),
+                )
+            } catch (_: TimeoutCancellationException) {
+                // Catch the specific exception from withTimeout
+                logger.warn("Compilation command timed out for source file: {}", sourceFile)
+                // Throw *our* custom exception to signal timeout clearly to the caller
+                throw CompilationTimeoutException(
+                    "Compilation exceeded $compileTimeoutSeconds seconds"
+                )
+            } catch (ioe: IOException) {
+                logger.error(
+                    "IOException during compilation command execution for {}: {}",
+                    sourceFile,
+                    ioe.message,
+                )
+                CompileCommandResult(
+                    exitCode = -1,
+                    output = "Failed to start compiler: ${ioe.message}",
+                    success = false,
+                )
+            } catch (e: Exception) {
+                // Catch other potential exceptions from process handling
+                logger.error(
+                    "Exception during compilation command execution for {}: {}",
+                    sourceFile,
+                    e.message,
+                    e,
+                )
+                CompileCommandResult(
+                    exitCode = -1,
+                    output = "Internal error during compilation: ${e.message}",
+                    success = false,
+                )
+            }
         }
-    }
 
     /**
      * Helper function to update the job status in the database. Use single-shot update to avoid
