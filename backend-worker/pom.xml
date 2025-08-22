@@ -181,6 +181,11 @@
             <artifactId>logstash-logback-encoder</artifactId>
             <version>8.1</version>
         </dependency>
+
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
         <!-- 如果需要测试 MinIO 交互，可能需要 testcontainers-minio -->
         <!-- <dependency>
             <groupId>org.testcontainers</groupId>

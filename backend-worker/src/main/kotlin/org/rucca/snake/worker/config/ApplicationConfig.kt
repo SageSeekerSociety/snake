@@ -21,6 +21,8 @@ data class NsjailProperties(
 data class CacheProperties(
     var basePath: String = "/tmp/snake/cache",
     var ttl: Duration = Duration.ofDays(1),
+    var staleTolerance: Duration = Duration.ZERO,
+    var atimeTouchWindowSec: Long = 60,
 )
 
 data class ConcurrencyProperties(var nsjailPermits: Int = 2, var maxWorkerJobs: Int = 2)
