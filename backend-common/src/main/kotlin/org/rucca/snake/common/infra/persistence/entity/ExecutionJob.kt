@@ -3,6 +3,7 @@ package org.rucca.snake.common.infra.persistence.entity
 import jakarta.persistence.*
 import java.time.Instant
 import java.util.*
+import org.rucca.snake.common.utils.UuidV7
 import org.rucca.snake.common.domain.model.JobStatus
 
 @Entity
@@ -21,7 +22,7 @@ import org.rucca.snake.common.domain.model.JobStatus
         ],
 )
 data class ExecutionJob(
-    @Id var jobId: UUID = UUID.randomUUID(),
+    @Id var jobId: UUID = UuidV7.generate(),
     @Column(nullable = false) var userId: Long = 0,
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)

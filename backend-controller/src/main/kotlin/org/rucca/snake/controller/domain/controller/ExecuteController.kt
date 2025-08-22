@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.filter
 import org.apache.catalina.connector.ClientAbortException
 import org.rucca.cheese.auth.AuthenticationService
 import org.rucca.cheese.auth.annotation.Guard
+import org.rucca.snake.common.utils.UuidV7
 import org.rucca.snake.controller.domain.model.ApiError
 import org.rucca.snake.controller.domain.model.ApiResponse
 import org.rucca.snake.controller.domain.model.BatchExecutionItem
@@ -90,7 +91,8 @@ class ExecuteController(
                     )
             }
 
-            val finalSessionId = firstSessionId ?: UUID.randomUUID().toString()
+            val finalSessionId =
+                firstSessionId ?: org.rucca.snake.common.utils.UuidV7.generate().toString()
             val finalRequests = requests.map { it.copy(sessionId = finalSessionId) }
 
             val results: Map<String, Result<String>> =
@@ -222,7 +224,7 @@ class ExecuteController(
                                         // 4. Construct and send the SSE event.
                                         val sseEvent =
                                             SseEmitter.event()
-                                                .id(UUID.randomUUID().toString())
+                                                .id(UuidV7.generate().toString())
                                                 .name(event.eventType)
                                                 .data(
                                                     event.copy(data = clientEventData),

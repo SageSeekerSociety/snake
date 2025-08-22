@@ -24,6 +24,7 @@ import org.rucca.snake.common.infra.persistence.entity.CompilationJob
 import org.rucca.snake.common.infra.persistence.entity.ExecutionJob
 import org.rucca.snake.common.infra.persistence.repository.CompilationJobRepository
 import org.rucca.snake.common.infra.persistence.repository.ExecutionJobRepository
+import org.rucca.snake.common.utils.UuidV7
 import org.rucca.snake.common.utils.withSuspendingSpan
 import org.rucca.snake.controller.domain.model.BatchExecutionItem
 import org.rucca.snake.controller.domain.model.JobSseEvent
@@ -156,7 +157,7 @@ class JobSubmitService(
             logCurrentTrace("submitCompilation.entry")
             submissionCounter("compilation").increment()
 
-            val jobId = UUID.randomUUID()
+            val jobId = org.rucca.snake.common.utils.UuidV7.generate()
             val submitTime = Instant.now()
             val sourceCodeObjectKey = "sources/$userId/$jobId/source.cpp"
 
@@ -325,7 +326,7 @@ class JobSubmitService(
             val submittedJobIds = mutableListOf<UUID>()
 
             requests.forEachIndexed { index, item ->
-                val resultKey = item.clientRequestId ?: "batch_item_${index}_${UUID.randomUUID()}"
+                val resultKey = item.clientRequestId ?: "batch_item_${index}_${UuidV7.generate()}"
                 var submittedJobId: UUID? = null
                 try {
                     // Call a separate method for each item, which now correctly manages its own
@@ -401,7 +402,7 @@ class JobSubmitService(
         logCurrentTrace("submitSingleExecution.entry")
         submissionCounter("execution").increment()
 
-        val jobId = UUID.randomUUID()
+        val jobId = org.rucca.snake.common.utils.UuidV7.generate()
         val submitTime = Instant.now()
         val sessionUuid =
             runCatching { UUID.fromString(finalSessionId) }

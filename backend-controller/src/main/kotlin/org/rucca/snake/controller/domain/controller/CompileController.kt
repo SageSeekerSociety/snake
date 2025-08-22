@@ -9,6 +9,7 @@ import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.*
 import org.rucca.cheese.auth.AuthenticationService
 import org.rucca.cheese.auth.annotation.Guard
+import org.rucca.snake.common.utils.UuidV7
 import org.rucca.snake.controller.domain.model.ApiError
 import org.rucca.snake.controller.domain.model.ApiResponse
 import org.rucca.snake.controller.domain.service.JobFlowService
@@ -130,7 +131,7 @@ class CompileController(
                             try {
                                 val sseEvent =
                                     SseEmitter.event()
-                                        .id(UUID.randomUUID().toString())
+                                        .id(UuidV7.generate().toString())
                                         .name(event.eventType)
                                         .data(event, MediaType.APPLICATION_JSON)
                                 emitter.send(sseEvent)
