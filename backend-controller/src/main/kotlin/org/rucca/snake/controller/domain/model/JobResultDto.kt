@@ -40,6 +40,7 @@ data class ExecutionJobResultDto(
     override val errorDetails: String?,
     override val workerNodeId: String?,
     val programOutput: String?, // Specific to execution (consider truncation/ref if large)
+    val programStderr: String?, // Stderr output from program
     val cpuTimeSeconds: Double?, // Specific to execution
     val memoryKb: Long?, // Specific to execution
     val exitCode: Int?, // Specific to execution

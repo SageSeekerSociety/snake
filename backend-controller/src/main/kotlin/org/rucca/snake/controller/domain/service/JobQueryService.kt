@@ -69,6 +69,7 @@ class JobQueryService(
                         programOutput =
                             executionJob
                                 .programOutput, // Consider truncation/ref logic here if needed
+                        programStderr = executionJob.programStderr,
                         cpuTimeSeconds = executionJob.cpuTimeSeconds,
                         memoryKb = executionJob.memoryKb,
                         exitCode = executionJob.exitCode,

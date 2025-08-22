@@ -12,6 +12,7 @@ data class ExecutionResultNotification(
     val memoryKb: Long?,
     val exitCode: Int?,
     val action: String?,
+    val programStderr: String?,
     val newMemoryData: String?,
     val errorDetails: String?,
     val sandboxLogRef: String?,

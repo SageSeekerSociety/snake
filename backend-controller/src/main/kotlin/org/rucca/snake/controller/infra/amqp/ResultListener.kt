@@ -234,6 +234,7 @@ class ResultListener(
                             "errorDetails" to notification.errorDetails,
                             "workerNodeId" to notification.workerNodeId,
                             "programOutput" to notification.action,
+                            "programStderr" to notification.programStderr,
                             "cpuTimeSeconds" to notification.cpuTimeSeconds,
                             "memoryKb" to notification.memoryKb,
                             "exitCode" to notification.exitCode,
