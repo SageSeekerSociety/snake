@@ -16,13 +16,13 @@
     <description>Common classes and interfaces for the snake game backend</description>
     <!-- packaging 默认为 jar，无需显式指定 -->
 
-  <dependencies>
-    <!-- UUID v7 generator (JUG) -->
-    <dependency>
-      <groupId>com.fasterxml.uuid</groupId>
-      <artifactId>java-uuid-generator</artifactId>
-      <version>5.1.0</version>
-    </dependency>
+    <dependencies>
+        <!-- UUID v7 generator (JUG) -->
+        <dependency>
+            <groupId>com.fasterxml.uuid</groupId>
+            <artifactId>java-uuid-generator</artifactId>
+            <version>5.1.0</version>
+        </dependency>
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-stdlib</artifactId>
