@@ -16,8 +16,8 @@ import org.rucca.snake.common.domain.model.JobStatus
             Index(name = "idx_execution_jobs_submit_time", columnList = "submitTime"),
             Index(name = "idx_execution_jobs_session_user", columnList = "sessionId, userId"),
             Index(
-                name = "idx_execution_jobs_session_tick_requesting_user",
-                columnList = "sessionId, tickNumber, requestingUserId",
+                name = "idx_execution_jobs_session_requesting_user_tick",
+                columnList = "sessionId, requestingUserId, tickNumber",
             ),
         ],
 )
