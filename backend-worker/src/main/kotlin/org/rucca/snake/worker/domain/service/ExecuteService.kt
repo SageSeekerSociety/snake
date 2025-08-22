@@ -18,6 +18,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.regex.Pattern
 import kotlinx.coroutines.*
+import kotlin.random.Random
+import java.io.ByteArrayInputStream
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import org.rucca.snake.common.domain.model.ExecutionRequest
@@ -32,6 +34,7 @@ import org.rucca.snake.worker.infra.amqp.ResultNotifier
 import org.rucca.snake.worker.infra.storage.MinioService
 import org.rucca.snake.worker.utils.deleteDirectoryRecursively
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.stereotype.Service
@@ -48,6 +51,8 @@ class ExecuteService(
     openTelemetry: OpenTelemetry,
     @Value("\${memory.ttl.minutes}") private val memoryTtlMinutes: Long,
     @Value("\${memory.max.size.kb}") private val memoryMaxSizeKb: Int,
+    @Qualifier("applicationCoroutineScope") private val appScope: CoroutineScope,
+    @Value("\${logging.upload.success-sample-rate:0.0}") private val successLogSampleRate: Double,
 ) {
     private val tracer: Tracer = openTelemetry.getTracer(ExecuteService::class.java.name)
 
@@ -129,6 +134,9 @@ class ExecuteService(
                 var sandboxLogContent: String? =
                     null // Store log content if needed for debugging or result
                 var errorDetails: String? = null
+                // Set when we decide to upload logs (failure or sampled success)
+                val logFileKey = "logs/$aiOwnerUserId/$jobId/nsjail.log"
+                var finalLogRef: String? = null
                 val startTime = Instant.now()
 
                 // Initialize previousMemoryData
@@ -206,13 +214,7 @@ class ExecuteService(
                     }
 
                 try {
-                    // 1. Update DB Status to RUNNING
-                    tracer.withSuspendingSpan("db.update_job_status") {
-                        updateJobStatus(jobId, JobStatus.RUNNING, startTime = startTime)
-                    }
-                    currentStatus = JobStatus.RUNNING
-
-                    // 2. Ensure execution directory exists
+                    // Ensure execution directory exists (skip DB RUNNING state to reduce writes)
                     withContext(Dispatchers.IO + Context.current().asContextElement()) {
                         try {
                             Files.createDirectories(executionDir)
@@ -267,7 +269,7 @@ class ExecuteService(
                         }
                     }
 
-                    // 4. Prepare Input File
+                    // Prepare Input File
                     withContext(Dispatchers.IO + Context.current().asContextElement()) {
                         try {
                             val aiInputContentBytes =
@@ -286,7 +288,7 @@ class ExecuteService(
                         }
                     }
 
-                    // 5. Execute in Sandbox (using Semaphore)
+                    // Execute in Sandbox (using Semaphore)
                     logger.debug("Job {} WAITING for nsjail permit...", jobId)
                     val startTimeNsjailWait = System.nanoTime()
 
@@ -319,7 +321,7 @@ class ExecuteService(
                         }
                     logger.info("Released nsjail permit for job {}", jobId)
 
-                    // 6. Process Nsjail Result
+                    // Process Nsjail Result
                     exitCode = nsjailResult.exitCode
                     // programOutput is now split into action and newMemoryData
                     // programOutput = nsjailResult.output // Old way
@@ -447,6 +449,11 @@ class ExecuteService(
                             memoryKb ?: "N/A",
                             errorDetails.take(200),
                         )
+                        // Failure: schedule async log upload and set ref
+                        if (Files.exists(logFile)) {
+                            finalLogRef = logFileKey
+                            scheduleAsyncLogUpload(logFileKey, logFile)
+                        }
                     } else {
                         logger.info(
                             "Execution job {} finished with status: {}. ExitCode: {}, CPU: {}s, Mem: {}KB.",
@@ -456,6 +463,11 @@ class ExecuteService(
                             cpuTimeSeconds ?: "N/A",
                             memoryKb ?: "N/A",
                         )
+                        // Optional sampling for successful logs
+                        if (shouldSampleSuccessLog() && Files.exists(logFile)) {
+                            finalLogRef = logFileKey
+                            scheduleAsyncLogUpload(logFileKey, logFile)
+                        }
                     }
                 } catch (e: TimeoutCancellationException) {
                     // This would typically be caught if the semaphore wait times out,
@@ -466,6 +478,11 @@ class ExecuteService(
                     )
                     currentStatus = JobStatus.ERROR // Or maybe a specific timeout status
                     errorDetails = "Worker operation timed out: ${e.message}"
+                    // On failure, schedule async log upload
+                    if (Files.exists(logFile)) {
+                        finalLogRef = logFileKey
+                        scheduleAsyncLogUpload(logFileKey, logFile)
+                    }
                     // Re-throw
                     throw e
                 } catch (e: Exception) {
@@ -477,39 +494,22 @@ class ExecuteService(
                     )
                     currentStatus = JobStatus.ERROR // Worker internal error
                     errorDetails = "Internal worker error during execution: ${e.message}"
+                    // On failure, schedule async log upload
+                    if (Files.exists(logFile)) {
+                        finalLogRef = logFileKey
+                        scheduleAsyncLogUpload(logFileKey, logFile)
+                    }
                     // Re-throw to ensure NACK
                     throw e
                 } finally {
                     jobOutcomeCounter(currentStatus).increment()
 
-                    val logFileKey = "logs/$aiOwnerUserId/$jobId/nsjail.log"
-                    var finalLogRef: String? = null
-                    if (Files.exists(logFile)) {
-                        try {
-                            tracer.withSuspendingSpan("minio.upload_log", ctx = Dispatchers.IO) {
-                                minioService
-                                    .uploadFile(
-                                        objectKey = logFileKey,
-                                        filePath = logFile,
-                                        contentType = "text/plain",
-                                    )
-                                    ?.also { finalLogRef = logFileKey }
-                            }
-                            logger.info("Uploaded nsjail log file for job {} to MinIO", jobId)
-                        } catch (e: Exception) {
-                            logger.error(
-                                "Failed to upload nsjail log file for job {}: {}",
-                                jobId,
-                                e.message,
-                            )
-                        }
-                    }
-
-                    // 7. Final DB Update
+                    // Final DB Update
                     tracer.withSuspendingSpan("db.update_job", ctx = Dispatchers.IO) {
                         updateJobStatus(
                             jobId = jobId,
                             status = currentStatus,
+                            startTime = startTime,
                             endTime = Instant.now(),
                             programOutput = action,
                             cpuTimeSeconds = cpuTimeSeconds,
@@ -547,7 +547,7 @@ class ExecuteService(
                         )
                     }
 
-                    // 8. Cleanup execution-specific directory (input, log)
+                    // Cleanup execution-specific directory (input, log)
                     tracer.withSuspendingSpan("fs.cleanup", ctx = Dispatchers.IO + NonCancellable) {
                         try {
                             if (Files.exists(executionDir)) {
@@ -567,6 +567,35 @@ class ExecuteService(
                         }
                     }
                 }
+            }
+        }
+    }
+
+    private fun shouldSampleSuccessLog(): Boolean {
+        if (successLogSampleRate <= 0.0) return false
+        if (successLogSampleRate >= 1.0) return true
+        return Random.nextDouble() < successLogSampleRate
+    }
+
+    private fun scheduleAsyncLogUpload(objectKey: String, filePath: Path) {
+        // Read the file eagerly to avoid races with cleanup
+        val data = runCatching { Files.readAllBytes(filePath) }.getOrElse {
+            logger.error("Read log file failed before async upload {}: {}", objectKey, it.message)
+            return
+        }
+        appScope.launch(Dispatchers.IO + Context.current().asContextElement()) {
+            try {
+                tracer.withSuspendingSpan("minio.upload_log.async") {
+                    minioService.uploadStream(
+                        objectKey = objectKey,
+                        inputStream = ByteArrayInputStream(data),
+                        size = data.size.toLong(),
+                        contentType = "text/plain",
+                    )
+                }
+                logger.info("Async uploaded nsjail log to MinIO: {}", objectKey)
+            } catch (e: Exception) {
+                logger.error("Async log upload failed for {}: {}", objectKey, e.message)
             }
         }
     }
@@ -876,27 +905,29 @@ class ExecuteService(
     ) {
         withContext(Dispatchers.IO) {
             try {
-                val job = executionJobRepository.findById(UUID.fromString(jobId)).orElse(null)
-
-                if (job == null) {
-                    logger.error("Execution job with ID {} not found for status update.", jobId)
-                    return@withContext // Exit if job not found
+                val rows =
+                    executionJobRepository.updateFinalByIdIfStatus(
+                        jobId = UUID.fromString(jobId),
+                        expectedStatus = JobStatus.PENDING,
+                        status = status,
+                        startTime = startTime,
+                        endTime = endTime,
+                        programOutput = programOutput,
+                        cpuTimeSeconds = cpuTimeSeconds,
+                        memoryKb = memoryKb,
+                        exitCode = exitCode,
+                        sandboxLogRef = sandboxLogRef,
+                        errorDetails = errorDetails,
+                        workerNodeId = applicationConfig.nodeId,
+                    )
+                if (rows == 0) {
+                    logger.warn(
+                        "No rows updated for execution job {}. It may have been already finalized or not found.",
+                        jobId,
+                    )
+                } else {
+                    logger.info("Updated execution job {} status to {}", jobId, status)
                 }
-
-                job.status = status
-                if (startTime != null && job.startExecutionTime == null)
-                    job.startExecutionTime = startTime
-                if (endTime != null) job.endExecutionTime = endTime
-                if (programOutput != null)
-                    job.programOutput = programOutput // TODO: Add OLE check/truncation?
-                job.cpuTimeSeconds = cpuTimeSeconds
-                job.memoryKb = memoryKb
-                job.exitCode = exitCode
-                job.sandboxLogRef = sandboxLogRef
-                job.errorDetails = errorDetails
-                //                job.workerNodeId = appConfig.workerId
-                executionJobRepository.save(job)
-                logger.info("Updated execution job {} status to {}", jobId, status)
             } catch (e: Exception) {
                 logger.error(
                     "Failed to update database for execution job {}: {}",

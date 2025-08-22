@@ -3,6 +3,7 @@ package org.rucca.snake.common.infra.persistence.entity
 import jakarta.persistence.*
 import java.time.Instant
 import java.util.*
+import org.rucca.snake.common.utils.UuidV7
 import org.rucca.snake.common.domain.model.JobStatus
 
 @Entity
@@ -13,10 +14,15 @@ import org.rucca.snake.common.domain.model.JobStatus
             Index(name = "idx_compilation_jobs_user_id", columnList = "userId"),
             Index(name = "idx_compilation_jobs_status", columnList = "status"),
             Index(name = "idx_compilation_jobs_submit_time", columnList = "submitTime"),
+            // Mirror Flyway V6 composite index (note: JPA cannot express DESC here)
+            Index(
+                name = "idx_compilation_jobs_user_submit_time",
+                columnList = "userId, submitTime",
+            ),
         ],
 )
 data class CompilationJob(
-    @Id var jobId: UUID = UUID.randomUUID(),
+    @Id var jobId: UUID = UuidV7.generate(),
     @Column(nullable = false) var userId: Long = 0,
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)

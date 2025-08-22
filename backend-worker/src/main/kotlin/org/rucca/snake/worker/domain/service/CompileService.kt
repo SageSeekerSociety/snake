@@ -63,11 +63,7 @@ class CompileService(
         val startTime = Instant.now()
 
         try {
-            // 1. Update DB Status to COMPILING
-            currentStatus = JobStatus.COMPILING
-            updateJobStatus(jobId, currentStatus, startTime = startTime)
-
-            // 2. Prepare compilation directory
+            // Prepare compilation directory (skip DB COMPILING state to reduce writes)
             val compileDir: Path =
                 withContext(Dispatchers.IO) {
                     try {
@@ -88,7 +84,7 @@ class CompileService(
                     }
                 }
 
-            // 3. Download Source Code from MinIO
+            // Download Source Code from MinIO
             logger.info(
                 "Downloading source code for job {} from MinIO key '{}' to '{}'",
                 jobId,
@@ -109,21 +105,13 @@ class CompileService(
                 )
                 currentStatus = JobStatus.ERROR
                 errorDetails = "Failed to download source code from storage."
-                // No need to proceed further if source isn't available
-                updateJobStatus(
-                    jobId,
-                    currentStatus,
-                    endTime = Instant.now(),
-                    errorDetails = errorDetails,
-                )
-                cleanupCompileDir(compileDir, jobId) // Clean up directory
-                // Re-throw to trigger NACK
+                // Re-throw to trigger NACK and let finally perform the single final DB update
                 throw RuntimeException("Failed to download source code for job $jobId")
             }
 
             logger.info("Successfully downloaded source code for job {}", jobId)
 
-            // 4. Execute Compilation
+            // Execute Compilation
             val compileResult = executeCompileCommand(sourceFilePath, outputFilePath)
             compileOutputText = compileResult.output // Store compiler output regardless of success
 
@@ -179,17 +167,18 @@ class CompileService(
             // Re-throw to ensure NACK
             throw e
         } finally {
-            // 6. Final DB Update (always attempt this)
+            // Final DB Update (single write including startTime)
             updateJobStatus(
                 jobId,
                 currentStatus,
+                startTime = startTime,
                 endTime = Instant.now(),
                 compilerOutput = compileOutputText,
                 programStorageRef = programStorageRef,
                 errorDetails = errorDetails,
             )
 
-            // 7. Notify Result via AMQP
+            // Notify Result via AMQP
             resultNotifier.notifyCompilationResult(
                 UUID.fromString(jobId),
                 request.userId,
@@ -197,7 +186,7 @@ class CompileService(
                 programStorageRef,
             )
 
-            // 8. Cleanup local compile directory
+            // Cleanup local compile directory
             cleanupCompileDir(userCompileDir, jobId)
         }
     }
@@ -285,8 +274,8 @@ class CompileService(
     }
 
     /**
-     * Helper function to update the job status in the database. Uses findById and save, which might
-     * not be atomic. Consider custom query for atomic updates if needed.
+     * Helper function to update the job status in the database. Use single-shot update to avoid
+     * read-modify-write and reduce DB load.
      */
     private suspend fun updateJobStatus(
         jobId: String,
@@ -297,46 +286,30 @@ class CompileService(
         programStorageRef: String? = null,
         errorDetails: String? = null,
     ) {
-        // Perform DB operations on the IO dispatcher, which is designed for blocking calls.
         withContext(Dispatchers.IO) {
             try {
-                // Find the job by its ID. orElse(null) is more idiomatic with Kotlin's null safety.
-                val job = compilationJobRepository.findById(UUID.fromString(jobId)).orElse(null)
-
-                if (job == null) {
-                    logger.error("Could not find job with ID {} to update status.", jobId)
-                    return@withContext // Exit if job is not found
+                val rows =
+                    compilationJobRepository.updateFinalByIdIfStatus(
+                        jobId = UUID.fromString(jobId),
+                        expectedStatus = JobStatus.PENDING,
+                        status = status,
+                        startTime = startTime,
+                        endTime = endTime,
+                        compilerOutput = compilerOutput,
+                        programStorageRef = programStorageRef,
+                        errorDetails = errorDetails,
+                        workerNodeId = applicationConfig.nodeId,
+                    )
+                if (rows == 0) {
+                    logger.warn(
+                        "No rows updated for compilation job {}. It may have been already finalized or not found.",
+                        jobId,
+                    )
+                } else {
+                    logger.info("Updated job {} status to {}", jobId, status)
                 }
-
-                // Use 'apply' for cleaner property updates on the entity object.
-                job.apply {
-                    this.status = status
-                    if (startTime != null && this.startCompileTime == null) {
-                        this.startCompileTime = startTime // Set start time only once
-                    }
-                    if (endTime != null) {
-                        this.endCompileTime = endTime
-                    }
-                    if (compilerOutput != null) {
-                        this.compilerOutput = compilerOutput // Update compiler output
-                    }
-                    if (programStorageRef != null) {
-                        this.programStorageRef = programStorageRef
-                    }
-                    if (errorDetails != null) {
-                        this.errorDetails = errorDetails
-                    }
-                    // Fetch worker ID if needed
-                    // this.workerNodeId = appConfig.workerId
-                }
-
-                // Save the updated job entity. This is a blocking call.
-                compilationJobRepository.save(job)
-                logger.info("Updated job {} status to {}", jobId, status)
             } catch (e: Exception) {
                 logger.error("Failed to update database for job {}: {}", jobId, e.message, e)
-                // This is problematic. If DB update fails, the job state might be inconsistent.
-                // Consider retry logic or marking the job as potentially inconsistent.
             }
         }
     }
