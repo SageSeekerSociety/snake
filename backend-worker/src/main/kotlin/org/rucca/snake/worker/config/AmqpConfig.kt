@@ -54,7 +54,9 @@ class AmqpConfig {
     private lateinit var resultsQueueName: String
 
     // --- Listener Configuration ---
-    @Value("\${amqp.listener.prefetch:10}") private val prefetchCount: Int = 10
+    @Value("\${amqp.listener.prefetch:8}") private val prefetchCount: Int = 8
+    @Value("\${amqp.listener.concurrency:8}") private val concurrency: Int = 8
+    @Value("\${amqp.listener.max-concurrency:8}") private val maxConcurrency: Int = 8
     @Value("\${amqp.listener.retry.initial-interval:1000}")
     private val retryInitialInterval: Long = 1000L
     @Value("\${amqp.listener.retry.max-interval:10000}") private val retryMaxInterval: Long = 10000L
@@ -221,6 +223,9 @@ class AmqpConfig {
         factory.setMessageConverter(jsonMessageConverter)
         factory.setPrefetchCount(prefetchCount) // Set prefetch count
         factory.setAcknowledgeMode(AcknowledgeMode.MANUAL)
+
+        factory.setConcurrentConsumers(concurrency)
+        factory.setMaxConcurrentConsumers(maxConcurrency)
 
         // Define a MethodInvocationRecoverer that throws AmqpRejectAndDontRequeueException
         val recoverer =

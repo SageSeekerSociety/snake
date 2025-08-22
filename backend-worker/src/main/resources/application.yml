@@ -115,6 +115,8 @@ amqp:
   listener:
     # This value should ideally be aligned with applicationConfig.concurrency.maxWorkerJobs
     prefetch: 8
+    concurrency: 8
+    max-concurrency: 8
     retry:
       initial-interval: 1000
       max-interval: 10000

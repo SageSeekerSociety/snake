@@ -87,7 +87,6 @@ services:
       - OTEL_METRICS_EXPORTER=none
       - OTEL_PROPAGATORS=tracecontext,baggage
       - OTEL_TRACES_SAMPLER=parentbased_traceidratio
-      - OTEL_TRACES_SAMPLER_ARG=1.0
       - SPRING_PROFILES_ACTIVE=prod
       - MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,prometheus
     depends_on:
@@ -126,7 +125,6 @@ services:
       - OTEL_METRICS_EXPORTER=none
       - OTEL_PROPAGATORS=tracecontext,baggage
       - OTEL_TRACES_SAMPLER=parentbased_traceidratio
-      - OTEL_TRACES_SAMPLER_ARG=1.0
       - SPRING_PROFILES_ACTIVE=prod
       - MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,prometheus
     cgroup: host
