@@ -1,10 +1,12 @@
 package org.rucca.snake.worker.domain.service
 
+// KeyedMutex removed in favor of request coalescing via Deferreds
 import com.github.benmanes.caffeine.cache.Caffeine
 import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Timer
 import io.opentelemetry.api.OpenTelemetry
+import io.opentelemetry.api.trace.Span
 import io.opentelemetry.instrumentation.annotations.WithSpan
 import java.io.IOException
 import java.nio.charset.StandardCharsets
@@ -25,7 +27,6 @@ import org.rucca.snake.common.utils.withSuspendingSpan
 import org.rucca.snake.worker.config.ApplicationConfig
 import org.rucca.snake.worker.infra.storage.MinioObjectInfo
 import org.rucca.snake.worker.infra.storage.MinioService
-import org.rucca.snake.worker.utils.KeyedMutex
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
@@ -47,8 +48,8 @@ class CacheManager(
     private val staleTolerance: Duration = applicationConfig.cache.staleTolerance
     private val atimeTouchWindowSec: Long = applicationConfig.cache.atimeTouchWindowSec
 
-    // ---- Concurrency: striped locks to limit growth & reduce contention ----
-    private val keyLocks = KeyedMutex<String>()
+    // ---- Request coalescing: track in-flight downloads keyed by user|objectKey ----
+    private val inFlightDownloads = ConcurrentHashMap<String, CompletableDeferred<Path?>>()
 
     // ---- Metadata cache to reduce remote stat pressure ----
     private val metadataCache =
@@ -92,6 +93,7 @@ class CacheManager(
             "miss_not_found",
             "fallback_stale_ok",
             "fallback_download_failed",
+            "coalesced",
             "error",
         )
     private val outcomeCounters =
@@ -130,6 +132,11 @@ class CacheManager(
     suspend fun getProgramPath(userId: Long, objectKey: String): Path? {
         val timerSample = Timer.start(meterRegistry)
         try {
+            // annotate method span with identifiers useful for debugging
+            Span.current().apply {
+                setAttribute("user.id", userId)
+                setAttribute("object.key", objectKey)
+            }
             val localPath = getLocalPathForObject(userId, objectKey)
 
             // 1) Try metadata cache + local validity (no locks)
@@ -137,104 +144,174 @@ class CacheManager(
                 if (isLocalFileValid(localPath, info)) {
                     maybeTouchAtime(localPath)
                     incOutcome("hit")
+                    Span.current().setAttribute("cache.outcome", "hit")
                     timerSample.stop(getTimer)
                     return localPath
                 }
             }
 
-            val waitSample = Timer.start(meterRegistry)
-            val result =
-                keyLocks.withLock("$userId|$objectKey") {
-                    waitSample.stop(lockWaitTimer)
+            val key = "$userId|$objectKey"
 
-                    // Double-check after acquiring lock
-                    metadataCache.getIfPresent(objectKey)?.let { info2 ->
-                        if (isLocalFileValid(localPath, info2)) {
-                            maybeTouchAtime(localPath)
-                            incOutcome("hit_double")
-                            return@withLock localPath
-                        }
-                    }
-
-                    // Refresh remote metadata
-                    val remoteInfo =
-                        try {
-                            val statSample = Timer.start(meterRegistry)
-                            try {
-                                tracer.withSuspendingSpan("minio.stat_object") {
-                                    minioService.statObject(objectKey)
-                                }
-                            } finally {
-                                statSample.stop(statTimer)
-                            }
-                        } catch (ex: Exception) {
-                            // Remote issue: optional stale tolerance fallback
-                            if (Files.exists(localPath) && staleTolerance > Duration.ZERO) {
-                                val lm = safeGetLastModified(localPath)
-                                if (lm != null && lm.isAfter(Instant.now().minus(staleTolerance))) {
-                                    logger.warn(
-                                        "Remote stat failed; using locally cached '{}' within stale tolerance.",
-                                        objectKey,
-                                    )
-                                    incOutcome("fallback_stale_ok")
-                                    maybeTouchAtime(localPath)
-                                    timerSample.stop(getTimer)
-                                    return@withLock localPath
-                                }
-                            }
-                            logger.warn("Remote stat failed for '{}': {}", objectKey, ex.message)
-                            incOutcome("error")
-                            timerSample.stop(getTimer)
-                            return@withLock null
-                        }
-
-                    if (remoteInfo == null) {
-                        // Remote 404: drop any local copy
-                        withContext(Dispatchers.IO) { Files.deleteIfExists(localPath) }
-                        metadataCache.invalidate(objectKey)
-                        incOutcome("miss_not_found")
-                        timerSample.stop(getTimer)
-                        return@withLock null
-                    }
-
-                    metadataCache.put(objectKey, remoteInfo)
-
-                    // Download on miss or invalid local
-                    if (!isLocalFileValid(localPath, remoteInfo)) {
-                        val dlSample = Timer.start(meterRegistry)
-                        val ok =
-                            try {
-                                downloadAndPlaceAtomically(localPath, remoteInfo)
-                            } catch (ex: Exception) {
-                                logger.error("Download error for '{}': {}", objectKey, ex.message)
-                                false
-                            } finally {
-                                dlSample.stop(downloadTimer)
-                            }
-                        if (!ok) {
-                            if (Files.exists(localPath) && staleTolerance > Duration.ZERO) {
-                                val lm = safeGetLastModified(localPath)
-                                if (lm != null && lm.isAfter(Instant.now().minus(staleTolerance))) {
-                                    incOutcome("fallback_download_failed")
-                                    maybeTouchAtime(localPath)
-                                    timerSample.stop(getTimer)
-                                    return@withLock localPath
-                                }
-                            }
-                            incOutcome("error")
-                            timerSample.stop(getTimer)
-                            return@withLock null
-                        }
-                        incOutcome("miss_downloaded")
-                    } else {
-                        incOutcome("hit_after_stat")
-                    }
-
-                    maybeTouchAtime(localPath)
+            // If a download is already in-flight, coalesce and wait
+            inFlightDownloads[key]?.let { existing ->
+                val waitSample = Timer.start(meterRegistry)
+                try {
+                    val res = tracer.withSuspendingSpan("cache.download.await") { existing.await() }
+                    incOutcome("coalesced")
+                    Span.current().setAttribute("cache.outcome", "coalesced")
                     timerSample.stop(getTimer)
-                    localPath
+                    return res
+                } finally {
+                    waitSample.stop(lockWaitTimer)
                 }
-            return result
+            }
+
+            // Try to become the leader
+            val promise = CompletableDeferred<Path?>()
+            val prev = inFlightDownloads.putIfAbsent(key, promise)
+            if (prev != null) {
+                val waitSample = Timer.start(meterRegistry)
+                try {
+                    val res = tracer.withSuspendingSpan("cache.download.await") { prev.await() }
+                    incOutcome("coalesced")
+                    Span.current().setAttribute("cache.outcome", "coalesced")
+                    timerSample.stop(getTimer)
+                    return res
+                } finally {
+                    waitSample.stop(lockWaitTimer)
+                }
+            }
+
+            // Leader path: execute metadata fetch + optional download under a span
+            var leaderResult: Path? = null
+            try {
+                leaderResult =
+                    tracer.withSuspendingSpan("cache.download.execute") {
+                        // Double-check after acquiring leadership
+                        metadataCache.getIfPresent(objectKey)?.let { info2 ->
+                            if (isLocalFileValid(localPath, info2)) {
+                                maybeTouchAtime(localPath)
+                                incOutcome("hit_double")
+                                Span.current().setAttribute("cache.outcome", "hit_double")
+                                timerSample.stop(getTimer)
+                                return@withSuspendingSpan localPath
+                            }
+                        }
+
+                        // Refresh remote metadata
+                        val remoteInfo =
+                            try {
+                                val statSample = Timer.start(meterRegistry)
+                                try {
+                                    tracer.withSuspendingSpan("minio.stat_object") {
+                                        minioService.statObject(objectKey)
+                                    }
+                                } finally {
+                                    statSample.stop(statTimer)
+                                }
+                            } catch (ex: Exception) {
+                                // Remote issue: optional stale tolerance fallback
+                                if (Files.exists(localPath) && staleTolerance > Duration.ZERO) {
+                                    val lm = safeGetLastModified(localPath)
+                                    if (
+                                        lm != null &&
+                                            lm.isAfter(Instant.now().minus(staleTolerance))
+                                    ) {
+                                        logger.warn(
+                                            "Remote stat failed; using locally cached '{}' within stale tolerance.",
+                                            objectKey,
+                                        )
+                                        incOutcome("fallback_stale_ok")
+                                        Span.current()
+                                            .setAttribute("cache.outcome", "fallback_stale_ok")
+                                        maybeTouchAtime(localPath)
+                                        timerSample.stop(getTimer)
+                                        return@withSuspendingSpan localPath
+                                    }
+                                }
+                                logger.warn(
+                                    "Remote stat failed for '{}': {}",
+                                    objectKey,
+                                    ex.message,
+                                )
+                                incOutcome("error")
+                                Span.current().setAttribute("cache.outcome", "error")
+                                timerSample.stop(getTimer)
+                                return@withSuspendingSpan null
+                            }
+
+                        if (remoteInfo == null) {
+                            // Remote 404: drop any local copy
+                            withContext(Dispatchers.IO) { Files.deleteIfExists(localPath) }
+                            metadataCache.invalidate(objectKey)
+                            incOutcome("miss_not_found")
+                            Span.current().setAttribute("cache.outcome", "miss_not_found")
+                            Span.current().setAttribute("cache.remote.not_found", true)
+                            timerSample.stop(getTimer)
+                            return@withSuspendingSpan null
+                        }
+
+                        metadataCache.put(objectKey, remoteInfo)
+
+                        // Download on miss or invalid local
+                        if (!isLocalFileValid(localPath, remoteInfo)) {
+                            val dlSample = Timer.start(meterRegistry)
+                            val ok =
+                                try {
+                                    downloadAndPlaceAtomically(localPath, remoteInfo)
+                                } catch (ex: Exception) {
+                                    logger.error(
+                                        "Download error for '{}': {}",
+                                        objectKey,
+                                        ex.message,
+                                    )
+                                    false
+                                } finally {
+                                    dlSample.stop(downloadTimer)
+                                }
+                            if (!ok) {
+                                if (Files.exists(localPath) && staleTolerance > Duration.ZERO) {
+                                    val lm = safeGetLastModified(localPath)
+                                    if (
+                                        lm != null &&
+                                            lm.isAfter(Instant.now().minus(staleTolerance))
+                                    ) {
+                                        incOutcome("fallback_download_failed")
+                                        Span.current()
+                                            .setAttribute(
+                                                "cache.outcome",
+                                                "fallback_download_failed",
+                                            )
+                                        maybeTouchAtime(localPath)
+                                        timerSample.stop(getTimer)
+                                        return@withSuspendingSpan localPath
+                                    }
+                                }
+                                incOutcome("error")
+                                Span.current().setAttribute("cache.outcome", "error")
+                                timerSample.stop(getTimer)
+                                return@withSuspendingSpan null
+                            }
+                            incOutcome("miss_downloaded")
+                            Span.current().setAttribute("cache.outcome", "miss_downloaded")
+                        } else {
+                            incOutcome("hit_after_stat")
+                            Span.current().setAttribute("cache.outcome", "hit_after_stat")
+                        }
+
+                        maybeTouchAtime(localPath)
+                        timerSample.stop(getTimer)
+                        return@withSuspendingSpan localPath
+                    }
+            } catch (t: Throwable) {
+                promise.completeExceptionally(t)
+                throw t
+            } finally {
+                inFlightDownloads.remove(key, promise)
+            }
+            // Complete and return based on leader outcome
+            promise.complete(leaderResult)
+            return leaderResult
         } catch (t: Throwable) {
             incOutcome("error")
             timerSample.stop(getTimer)
@@ -320,6 +397,12 @@ class CacheManager(
         return try {
             val ok =
                 tracer.withSuspendingSpan("cache.download_on_miss") {
+                    // annotate download span with remote metadata
+                    Span.current().apply {
+                        setAttribute("object.key", remote.objectKey)
+                        setAttribute("remote.etag", remote.etag ?: "")
+                        setAttribute("remote.size_bytes", remote.size)
+                    }
                     minioService.downloadObject(remote.objectKey, tmp)
                 }
             if (!ok) return false
