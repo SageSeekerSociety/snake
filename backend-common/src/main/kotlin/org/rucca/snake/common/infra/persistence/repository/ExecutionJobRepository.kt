@@ -2,8 +2,11 @@ package org.rucca.snake.common.infra.persistence.repository
 
 import java.util.*
 import org.rucca.snake.common.infra.persistence.entity.ExecutionJob
+import org.rucca.snake.common.domain.model.JobStatus
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
+import org.springframework.transaction.annotation.Transactional
 import org.springframework.stereotype.Repository
 
 @Repository
@@ -41,4 +44,41 @@ interface ExecutionJobRepository : JpaRepository<ExecutionJob, UUID> {
      *   `false`.
      */
     fun existsByJobIdAndUserId(jobId: UUID, userId: Long): Boolean
+
+    /**
+     * Single-shot final update to avoid read-modify-write. Uses a guard on expected current status
+     * (typically PENDING) for idempotency.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query(
+        """
+        UPDATE ExecutionJob ej
+        SET ej.status = :status,
+            ej.startExecutionTime = CASE WHEN ej.startExecutionTime IS NULL THEN :startTime ELSE ej.startExecutionTime END,
+            ej.endExecutionTime = :endTime,
+            ej.programOutput = :programOutput,
+            ej.cpuTimeSeconds = :cpuTimeSeconds,
+            ej.memoryKb = :memoryKb,
+            ej.exitCode = :exitCode,
+            ej.sandboxLogRef = :sandboxLogRef,
+            ej.errorDetails = :errorDetails,
+            ej.workerNodeId = :workerNodeId
+        WHERE ej.jobId = :jobId AND ej.status = :expectedStatus
+        """
+    )
+    fun updateFinalByIdIfStatus(
+        jobId: UUID,
+        expectedStatus: JobStatus,
+        status: JobStatus,
+        startTime: java.time.Instant?,
+        endTime: java.time.Instant?,
+        programOutput: String?,
+        cpuTimeSeconds: Double?,
+        memoryKb: Long?,
+        exitCode: Int?,
+        sandboxLogRef: String?,
+        errorDetails: String?,
+        workerNodeId: String?,
+    ): Int
 }
