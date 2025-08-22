@@ -1,13 +1,13 @@
 package org.rucca.snake.common.infra.persistence.repository
 
 import java.util.*
-import org.rucca.snake.common.infra.persistence.entity.ExecutionJob
 import org.rucca.snake.common.domain.model.JobStatus
+import org.rucca.snake.common.infra.persistence.entity.ExecutionJob
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
-import org.springframework.transaction.annotation.Transactional
 import org.springframework.stereotype.Repository
+import org.springframework.transaction.annotation.Transactional
 
 @Repository
 interface ExecutionJobRepository : JpaRepository<ExecutionJob, UUID> {

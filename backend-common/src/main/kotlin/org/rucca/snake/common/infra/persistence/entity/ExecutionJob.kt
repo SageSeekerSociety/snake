@@ -3,8 +3,8 @@ package org.rucca.snake.common.infra.persistence.entity
 import jakarta.persistence.*
 import java.time.Instant
 import java.util.*
-import org.rucca.snake.common.utils.UuidV7
 import org.rucca.snake.common.domain.model.JobStatus
+import org.rucca.snake.common.utils.UuidV7
 
 @Entity
 @Table(

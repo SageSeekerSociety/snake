@@ -6,8 +6,8 @@ import org.rucca.snake.common.infra.persistence.entity.CompilationJob
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
-import org.springframework.transaction.annotation.Transactional
 import org.springframework.stereotype.Repository
+import org.springframework.transaction.annotation.Transactional
 
 @Repository
 interface CompilationJobRepository : JpaRepository<CompilationJob, UUID> {
@@ -15,13 +15,11 @@ interface CompilationJobRepository : JpaRepository<CompilationJob, UUID> {
 
     fun existsByJobIdAndUserId(jobId: UUID, userId: Long): Boolean
 
-     /**
-      * Single-shot final update to avoid read-modify-write. Guarded by expected status.
-      */
-     @Modifying(clearAutomatically = true, flushAutomatically = true)
-     @Transactional
-     @Query(
-         """
+    /** Single-shot final update to avoid read-modify-write. Guarded by expected status. */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query(
+        """
          UPDATE CompilationJob cj
          SET cj.status = :status,
              cj.startCompileTime = CASE WHEN cj.startCompileTime IS NULL THEN :startTime ELSE cj.startCompileTime END,
@@ -32,16 +30,16 @@ interface CompilationJobRepository : JpaRepository<CompilationJob, UUID> {
              cj.workerNodeId = :workerNodeId
          WHERE cj.jobId = :jobId AND cj.status = :expectedStatus
          """
-     )
-     fun updateFinalByIdIfStatus(
-         jobId: UUID,
-         expectedStatus: JobStatus,
-         status: JobStatus,
-         startTime: java.time.Instant?,
-         endTime: java.time.Instant?,
-         compilerOutput: String?,
-         programStorageRef: String?,
-         errorDetails: String?,
-         workerNodeId: String?,
-     ): Int
+    )
+    fun updateFinalByIdIfStatus(
+        jobId: UUID,
+        expectedStatus: JobStatus,
+        status: JobStatus,
+        startTime: java.time.Instant?,
+        endTime: java.time.Instant?,
+        compilerOutput: String?,
+        programStorageRef: String?,
+        errorDetails: String?,
+        workerNodeId: String?,
+    ): Int
 }
