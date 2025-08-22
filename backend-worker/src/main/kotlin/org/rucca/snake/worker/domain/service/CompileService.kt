@@ -1,7 +1,6 @@
 package org.rucca.snake.worker.domain.service
 
 import io.opentelemetry.api.OpenTelemetry
-import io.opentelemetry.instrumentation.annotations.WithSpan
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -44,159 +43,158 @@ class CompileService(
      * @param request The compilation request data.
      * @param jobId The unique job ID associated with this request.
      */
-    @WithSpan("job.compile.process")
-    suspend fun processCompilationRequest(request: CompilationRequest, jobId: String) {
-        val userId = request.userId
-        val sourceCodeRef = request.sourceCodeRef
-        val userCompileDir =
-            Paths.get(applicationConfig.dataDirectory, userId.toString(), "compile", jobId)
-        val sourceFileName = "source.cpp" // Or derive from request if language varies
-        val outputFileName = "program" // The final executable name
-        val sourceFilePath = userCompileDir.resolve(sourceFileName)
-        val outputFilePath = userCompileDir.resolve(outputFileName)
-        val compiledProgramObjectKey = "programs/$userId/$outputFileName" // Object key in MinIO
+    suspend fun processCompilationRequest(request: CompilationRequest, jobId: String) =
+        tracer.withSuspendingSpan("job.compile.process") {
+            val userId = request.userId
+            val sourceCodeRef = request.sourceCodeRef
+            val userCompileDir =
+                Paths.get(applicationConfig.dataDirectory, userId.toString(), "compile", jobId)
+            val sourceFileName = "source.cpp" // Or derive from request if language varies
+            val outputFileName = "program" // The final executable name
+            val sourceFilePath = userCompileDir.resolve(sourceFileName)
+            val outputFilePath = userCompileDir.resolve(outputFileName)
+            val compiledProgramObjectKey = "programs/$userId/$outputFileName" // Object key in MinIO
 
-        var currentStatus = JobStatus.RECEIVED
-        var compileOutputText: String? = null
-        var errorDetails: String? = null
-        var programStorageRef: String? = null
-        val startTime = Instant.now()
+            var currentStatus = JobStatus.RECEIVED
+            var compileOutputText: String? = null
+            var errorDetails: String? = null
+            var programStorageRef: String? = null
+            val startTime = Instant.now()
 
-        try {
-            // Prepare compilation directory (skip DB COMPILING state to reduce writes)
-            val compileDir: Path =
-                withContext(Dispatchers.IO) {
-                    try {
-                        Files.createDirectories(userCompileDir)
-                        logger.info(
-                            "Created compile directory for job {} at {}",
-                            jobId,
-                            userCompileDir,
-                        )
-                        userCompileDir // Return the path
-                    } catch (e: IOException) {
-                        logger.error(
-                            "Failed to create compile directory for job {}: {}",
-                            jobId,
-                            e.message,
-                        )
-                        throw RuntimeException("IO error during compilation preparation", e)
+            try {
+                // Prepare compilation directory (skip DB COMPILING state to reduce writes)
+                val compileDir: Path =
+                    withContext(Dispatchers.IO) {
+                        try {
+                            Files.createDirectories(userCompileDir)
+                            logger.info(
+                                "Created compile directory for job {} at {}",
+                                jobId,
+                                userCompileDir,
+                            )
+                            userCompileDir // Return the path
+                        } catch (e: IOException) {
+                            logger.error(
+                                "Failed to create compile directory for job {}: {}",
+                                jobId,
+                                e.message,
+                            )
+                            throw RuntimeException("IO error during compilation preparation", e)
+                        }
                     }
-                }
 
-            // Download Source Code from MinIO
-            logger.info(
-                "Downloading source code for job {} from MinIO key '{}' to '{}'",
-                jobId,
-                sourceCodeRef,
-                sourceFilePath,
-            )
-
-            val downloadSuccess: Boolean =
-                tracer.withSuspendingSpan("minio.download_source", ctx = Dispatchers.IO) {
-                    minioService.downloadObject(sourceCodeRef, sourceFilePath)
-                }
-
-            if (!downloadSuccess) {
-                logger.error(
-                    "Failed to download source code from MinIO (key: {}) for job {}",
+                // Download Source Code from MinIO
+                logger.info(
+                    "Downloading source code for job {} from MinIO key '{}' to '{}'",
+                    jobId,
                     sourceCodeRef,
-                    jobId,
+                    sourceFilePath,
                 )
-                currentStatus = JobStatus.ERROR
-                errorDetails = "Failed to download source code from storage."
-                // Re-throw to trigger NACK and let finally perform the single final DB update
-                throw RuntimeException("Failed to download source code for job $jobId")
-            }
 
-            logger.info("Successfully downloaded source code for job {}", jobId)
-
-            // Execute Compilation
-            val compileResult = executeCompileCommand(sourceFilePath, outputFilePath)
-            compileOutputText = compileResult.output // Store compiler output regardless of success
-
-            if (!compileResult.success) {
-                logger.warn(
-                    "Compilation failed for job {}. Exit code: {}",
-                    jobId,
-                    compileResult.exitCode,
-                )
-                currentStatus = JobStatus.FAILED
-                errorDetails =
-                    "Compilation failed with exit code ${compileResult.exitCode}. Output:\n${compileOutputText.take(1024)}" // Truncate long output
-            } else {
-                logger.info("Compilation successful for job {}", jobId)
-
-                // 5. Upload successful result to MinIO
-                val etag =
-                    tracer.withSuspendingSpan("minio.upload_program") {
-                        minioService.uploadFile(compiledProgramObjectKey, outputFilePath)
+                val downloadSuccess: Boolean =
+                    tracer.withSuspendingSpan("minio.download_source", ctx = Dispatchers.IO) {
+                        minioService.downloadObject(sourceCodeRef, sourceFilePath)
                     }
-                if (etag == null) {
-                    logger.error("Failed to upload compiled program to MinIO for job {}", jobId)
-                    currentStatus = JobStatus.ERROR // Indicate an infrastructure error
-                    errorDetails = "Failed to upload result to object storage."
-                } else {
-                    currentStatus = JobStatus.SUCCESS
-                    programStorageRef = compiledProgramObjectKey // Store the reference
-                    logger.info(
-                        "Successfully uploaded program for job {} to MinIO: {}",
+
+                if (!downloadSuccess) {
+                    logger.error(
+                        "Failed to download source code from MinIO (key: {}) for job {}",
+                        sourceCodeRef,
                         jobId,
-                        compiledProgramObjectKey,
                     )
-
-                    // Optional: Invalidate cache (deferred)
-                    // Currently skipped as per requirement
+                    currentStatus = JobStatus.ERROR
+                    errorDetails = "Failed to download source code from storage."
+                    // Re-throw to trigger NACK and let finally perform the single final DB update
+                    throw RuntimeException("Failed to download source code for job $jobId")
                 }
+
+                logger.info("Successfully downloaded source code for job {}", jobId)
+
+                // Execute Compilation
+                val compileResult = executeCompileCommand(sourceFilePath, outputFilePath)
+                compileOutputText = compileResult.output // Store compiler output regardless of success
+
+                if (!compileResult.success) {
+                    logger.warn(
+                        "Compilation failed for job {}. Exit code: {}",
+                        jobId,
+                        compileResult.exitCode,
+                    )
+                    currentStatus = JobStatus.FAILED
+                    errorDetails =
+                        "Compilation failed with exit code ${compileResult.exitCode}. Output:\n${compileOutputText.take(1024)}" // Truncate long output
+                } else {
+                    logger.info("Compilation successful for job {}", jobId)
+
+                    // 5. Upload successful result to MinIO
+                    val etag =
+                        tracer.withSuspendingSpan("minio.upload_program") {
+                            minioService.uploadFile(compiledProgramObjectKey, outputFilePath)
+                        }
+                    if (etag == null) {
+                        logger.error("Failed to upload compiled program to MinIO for job {}", jobId)
+                        currentStatus = JobStatus.ERROR // Indicate an infrastructure error
+                        errorDetails = "Failed to upload result to object storage."
+                    } else {
+                        currentStatus = JobStatus.SUCCESS
+                        programStorageRef = compiledProgramObjectKey // Store the reference
+                        logger.info(
+                            "Successfully uploaded program for job {} to MinIO: {}",
+                            jobId,
+                            compiledProgramObjectKey,
+                        )
+
+                        // Optional: Invalidate cache (deferred)
+                        // Currently skipped as per requirement
+                    }
+                }
+            } catch (cte: CompilationTimeoutException) {
+                // Catch the specific timeout exception from executeCompileCommand
+                logger.error("Compilation timed out for job {}", jobId)
+                currentStatus = JobStatus.FAILED // Or TLE if you have a specific status
+                errorDetails = cte.message
+                compileOutputText = compileOutputText ?: "[Compilation Timed Out]"
+            } catch (e: Exception) {
+                logger.error(
+                    "Unhandled exception during compilation for job {}: {}",
+                    jobId,
+                    e.message,
+                    e,
+                )
+                currentStatus = JobStatus.ERROR // Worker internal error
+                errorDetails = "Internal worker error during compilation: ${e.message}"
+                // Re-throw to ensure NACK
+                throw e
+            } finally {
+                // Final DB Update (single write including startTime)
+                updateJobStatus(
+                    jobId,
+                    currentStatus,
+                    startTime = startTime,
+                    endTime = Instant.now(),
+                    compilerOutput = compileOutputText,
+                    programStorageRef = programStorageRef,
+                    errorDetails = errorDetails,
+                )
+
+                // Notify Result via AMQP
+                resultNotifier.notifyCompilationResult(
+                    UUID.fromString(jobId),
+                    request.userId,
+                    currentStatus,
+                    programStorageRef,
+                )
+
+                // Cleanup local compile directory
+                cleanupCompileDir(userCompileDir, jobId)
             }
-        } catch (cte: CompilationTimeoutException) {
-            // Catch the specific timeout exception from executeCompileCommand
-            logger.error("Compilation timed out for job {}", jobId)
-            currentStatus = JobStatus.FAILED // Or TLE if you have a specific status
-            errorDetails = cte.message
-            compileOutputText = compileOutputText ?: "[Compilation Timed Out]"
-        } catch (e: Exception) {
-            logger.error(
-                "Unhandled exception during compilation for job {}: {}",
-                jobId,
-                e.message,
-                e,
-            )
-            currentStatus = JobStatus.ERROR // Worker internal error
-            errorDetails = "Internal worker error during compilation: ${e.message}"
-            // Re-throw to ensure NACK
-            throw e
-        } finally {
-            // Final DB Update (single write including startTime)
-            updateJobStatus(
-                jobId,
-                currentStatus,
-                startTime = startTime,
-                endTime = Instant.now(),
-                compilerOutput = compileOutputText,
-                programStorageRef = programStorageRef,
-                errorDetails = errorDetails,
-            )
-
-            // Notify Result via AMQP
-            resultNotifier.notifyCompilationResult(
-                UUID.fromString(jobId),
-                request.userId,
-                currentStatus,
-                programStorageRef,
-            )
-
-            // Cleanup local compile directory
-            cleanupCompileDir(userCompileDir, jobId)
         }
-    }
 
     /** Executes the compilation command in a separate process with a timeout. */
-    @WithSpan("compile.command.execute")
     private suspend fun executeCompileCommand(
         sourceFile: Path,
         outputFile: Path,
-    ): CompileCommandResult {
+    ): CompileCommandResult = tracer.withSuspendingSpan("compile.command.execute") {
         val compilerPath = applicationConfig.compilerPath
         val compilerParameters = applicationConfig.compilerParameter
         val command = mutableListOf(compilerPath)
@@ -236,12 +234,12 @@ class CompileService(
                 }
             }
 
-            return CompileCommandResult(
+            CompileCommandResult(
                 exitCode = exitCode,
                 output = processOutput,
                 success = (exitCode == 0),
             )
-        } catch (e: TimeoutCancellationException) {
+        } catch (_: TimeoutCancellationException) {
             // Catch the specific exception from withTimeout
             logger.warn("Compilation command timed out for source file: {}", sourceFile)
             // Throw *our* custom exception to signal timeout clearly to the caller
@@ -252,7 +250,7 @@ class CompileService(
                 sourceFile,
                 ioe.message,
             )
-            return CompileCommandResult(
+            CompileCommandResult(
                 exitCode = -1,
                 output = "Failed to start compiler: ${ioe.message}",
                 success = false,
@@ -265,7 +263,7 @@ class CompileService(
                 e.message,
                 e,
             )
-            return CompileCommandResult(
+            CompileCommandResult(
                 exitCode = -1,
                 output = "Internal error during compilation: ${e.message}",
                 success = false,
