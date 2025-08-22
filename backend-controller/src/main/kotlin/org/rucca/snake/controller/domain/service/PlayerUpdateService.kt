@@ -1,15 +1,15 @@
 package org.rucca.snake.controller.domain.service
 
-import io.opentelemetry.instrumentation.annotations.WithSpan
+import io.opentelemetry.api.OpenTelemetry
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
-import kotlinx.coroutines.withContext
 import org.rucca.snake.common.domain.model.JobStatus
 import org.rucca.snake.common.infra.persistence.entity.Player
 import org.rucca.snake.common.infra.persistence.repository.PlayerRepository
 import org.rucca.snake.common.infra.persistence.repository.UserProfileRepository
+import org.rucca.snake.common.utils.withSuspendingSpan
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -18,19 +18,21 @@ import org.springframework.transaction.annotation.Transactional
 class PlayerUpdateService(
     private val playerRepository: PlayerRepository,
     private val userProfileRepository: UserProfileRepository,
+    openTelemetry: OpenTelemetry,
 ) {
+    private val tracer = openTelemetry.getTracer(PlayerUpdateService::class.java.name)
+
     private val logger = LoggerFactory.getLogger(PlayerUpdateService::class.java)
 
     /** Updates or creates the Player record upon successful code compilation. */
     @Transactional
-    @WithSpan("db.update_player_on_compile")
     suspend fun updatePlayerOnCompileSuccess(
         userId: Int, // Assuming User ID is Int
         jobId: UUID,
         compiledProgramRef: String,
         compileTime: Instant,
-    ) {
-        withContext(Dispatchers.IO) {
+    ) =
+        tracer.withSuspendingSpan("db.update_player_on_compile", ctx = Dispatchers.IO) {
             try {
                 // 1. Fetch UserProfile and Avatar data (needed for denormalized fields)
                 val userProfile = userProfileRepository.findByUserId(userId)
@@ -40,7 +42,7 @@ class PlayerUpdateService(
                         "Cannot update player record: UserProfile not found for userId {}",
                         userId,
                     )
-                    return@withContext
+                    return@withSuspendingSpan
                 }
 
                 // 2. Find existing player or create new one
@@ -75,7 +77,6 @@ class PlayerUpdateService(
                 // Consider adding specific monitoring or retry for this failure.
             }
         }
-    }
 
     // Optional: Handle other notifications, e.g., disable player on repeated errors?
     suspend fun handleExecutionResult(userId: Int, status: JobStatus) {

@@ -989,7 +989,7 @@ class ExecuteService(
         sandboxLogRef: String? = null,
         errorDetails: String? = null,
     ) {
-        withContext(Dispatchers.IO) {
+        withContext(Dispatchers.IO + Context.current().asContextElement()) {
             try {
                 val rows =
                     executionJobRepository.updateFinalByIdIfStatus(
