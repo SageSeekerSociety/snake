@@ -290,33 +290,33 @@ class ExecuteService(
                     logger.debug("Job {} WAITING for nsjail permit...", jobId)
                     val startTimeNsjailWait = System.nanoTime()
 
-                    val nsjailResult: NsjailResult = nsjailSemaphore.withPermit {
-                        availableNsjailPermits?.decrementAndGet()
-                        try {
-                            val waitTimeMs =
-                                (System.nanoTime() - startTimeNsjailWait) / 1_000_000.0
-                            logger.info(
-                                "Acquired nsjail permit for job {} in {} ms",
-                                jobId,
-                                waitTimeMs,
-                            )
-                            val res =
-                                tracer.withSuspendingSpan("nsjail.execute") {
-                                    runNsjail(
-                                        // Pass aiOwnerUserId
-                                        jobId = jobId, // Pass jobId for logging context if needed in runNsjail
-                                        userDataDir = userDataDir, // Chroot target
-                                        logFilePath = logFile,
-                                        inputFile = inputFile, // Redirect stdin from this file
-                                        programPath = "execute/$jobId/$programFileName", // Program to execute relative to chroot
-                                        request = request, // Pass request for resource limits
-                                    )
-                                }
-                            res // Return the result
-                        } finally {
-                            availableNsjailPermits?.incrementAndGet()
+                    val nsjailResult: NsjailResult =
+                        nsjailSemaphore.withPermit {
+                            availableNsjailPermits?.decrementAndGet()
+                            try {
+                                val waitTimeMs =
+                                    (System.nanoTime() - startTimeNsjailWait) / 1_000_000.0
+                                logger.info(
+                                    "Acquired nsjail permit for job {} in {} ms",
+                                    jobId,
+                                    waitTimeMs,
+                                )
+                                val res =
+                                    tracer.withSuspendingSpan("nsjail.execute") {
+                                        runNsjail(
+                                            jobId = jobId,
+                                            userDataDir = userDataDir, // Chroot target
+                                            logFilePath = logFile,
+                                            inputFile = inputFile, // Redirect stdin from this file
+                                            programPath = "execute/$jobId/$programFileName",
+                                            request = request, // Pass request for resource limits
+                                        )
+                                    }
+                                res // Return the result
+                            } finally {
+                                availableNsjailPermits?.incrementAndGet()
+                            }
                         }
-                    }
                     logger.info("Released nsjail permit for job {}", jobId)
 
                     // 6. Process Nsjail Result

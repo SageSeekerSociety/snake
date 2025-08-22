@@ -3,10 +3,9 @@ package org.rucca.snake.worker.infra.amqp
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import io.opentelemetry.api.OpenTelemetry
-import io.opentelemetry.context.Context
 import io.opentelemetry.context.propagation.ContextPropagators
-import io.opentelemetry.context.propagation.TextMapGetter
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
 import org.rucca.snake.common.constants.AmqpConstants
 import org.rucca.snake.common.domain.model.CompilationRequest
@@ -15,7 +14,6 @@ import org.rucca.snake.worker.domain.service.CompileService
 import org.rucca.snake.worker.domain.service.ExecuteService
 import org.slf4j.LoggerFactory
 import org.springframework.amqp.core.Message
-import org.springframework.amqp.core.MessageProperties
 import org.springframework.stereotype.Component
 
 @Component
@@ -28,14 +26,12 @@ class DefaultTaskProcessor(
     private val propagators: ContextPropagators = openTelemetry.propagators
 
     private val logger = LoggerFactory.getLogger(DefaultTaskProcessor::class.java)
-    
 
     override suspend fun processMessage(message: Message) {
         val messageProperties = message.messageProperties
         val messageBody = String(message.body, Charsets.UTF_8) // Assume UTF-8 encoding
         val correlationId = messageProperties.correlationId // Use correlationId as jobId
-        val messageType =
-            messageProperties.headers[AmqpConstants.HEADER_MESSAGE_TYPE] as? String
+        val messageType = messageProperties.headers[AmqpConstants.HEADER_MESSAGE_TYPE] as? String
 
         if (correlationId == null) {
             logger.error(
@@ -65,8 +61,7 @@ class DefaultTaskProcessor(
             // Delegate based on message type header
             when (messageType) {
                 AmqpConstants.MESSAGE_TYPE_COMPILE -> {
-                    val request: CompilationRequest =
-                        parseMessageBody(messageBody, correlationId)
+                    val request: CompilationRequest = parseMessageBody(messageBody, correlationId)
                     // Run the service logic on an appropriate dispatcher (IO is suitable for
                     // services doing IO)
                     // The services themselves use withContext for specific blocking calls
