@@ -120,7 +120,7 @@ class ExecuteService(
                         }
                         logger.info("Processed DB update batch size={}", batch.size)
                     } catch (e: Exception) {
-                        logger.error("Error in result processing batch: {}", e.message, e)
+                        logger.error("Error in result processing batch", e)
                     }
                 }
             }
@@ -167,7 +167,7 @@ class ExecuteService(
                     sandbox_log_ref = ?,
                     error_details = ?,
                     worker_node_id = ?
-                WHERE job_id = ? AND status = 'PENDING'
+                WHERE job_id = ? AND status = 'PENDING';
             """.trimIndent()
 
             val batchArgs = batch.map { result ->
@@ -186,7 +186,20 @@ class ExecuteService(
                 )
             }
 
-            val updateCounts = jdbcTemplate.batchUpdate(sql, batchArgs)
+            val updateCounts = try {
+                jdbcTemplate.batchUpdate(sql, batchArgs)
+            } catch (ex: org.springframework.dao.DataAccessException) {
+                val cause = ex.cause
+                if (cause is org.postgresql.util.PSQLException) {
+                    logger.error("SQLState={}, Message={}, Detail={}, Where={}",
+                        cause.sqlState,
+                        cause.serverErrorMessage?.message,
+                        cause.serverErrorMessage?.detail,
+                        cause.serverErrorMessage?.where
+                    )
+                }
+                throw ex
+            }
 
             updateCounts.forEachIndexed { index, count ->
                 val result = batch[index]
