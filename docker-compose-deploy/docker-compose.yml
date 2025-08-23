@@ -138,12 +138,14 @@ services:
       backend-controller:
         condition: service_healthy
     volumes:
-      - type: volume
-        source: backend_worker_data
+      - type: tmpfs
         target: /app/data
-      - type: volume
-        source: backend_worker_cache
+        tmpfs:
+          size: 1G
+      - type: tmpfs
         target: /app/cache
+        tmpfs:
+          size: 2G
       - ./application-worker.yml:/app/config/application.yml:ro
     logging:
       driver: json-file
@@ -284,8 +286,6 @@ volumes:
   prometheus_data:
   grafana_data:
   loki_data:
-  backend_worker_data:
-  backend_worker_cache:
   cheese_auth_uploads:
   cheese_auth_db_pg:
   frontend_dist:

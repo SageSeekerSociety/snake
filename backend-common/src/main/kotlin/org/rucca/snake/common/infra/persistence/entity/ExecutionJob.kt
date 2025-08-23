@@ -32,6 +32,7 @@ data class ExecutionJob(
     var startExecutionTime: Instant? = null,
     var endExecutionTime: Instant? = null,
     @Lob @Column(columnDefinition = "TEXT") var programOutput: String? = null,
+    @Lob @Column(columnDefinition = "TEXT") var programStderr: String? = null,
     var cpuTimeSeconds: Double? = null,
     var memoryKb: Long? = null,
     var exitCode: Int? = null,

@@ -7,6 +7,7 @@ import io.opentelemetry.api.trace.Span
 import io.opentelemetry.api.trace.Tracer
 import io.opentelemetry.context.Context
 import io.opentelemetry.extension.kotlin.asContextElement
+import jakarta.annotation.PostConstruct
 import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.nio.file.Files
@@ -14,13 +15,14 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import java.time.Duration
 import java.time.Instant
-import java.util.Base64
-import java.util.UUID
+import java.util.*
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.regex.Pattern
 import kotlin.random.Random
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.sync.Semaphore
 import org.rucca.snake.common.domain.model.ExecutionRequest
 import org.rucca.snake.common.domain.model.ExecutionResultNotification
@@ -38,6 +40,7 @@ import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
 
 @Service
 class ExecuteService(
@@ -67,6 +70,78 @@ class ExecuteService(
             "nsjail.permits.available",
             AtomicInteger(applicationConfig.concurrency.nsjailPermits),
         )
+
+    // Buffered channel to decouple DB/MQ from the critical path
+    private val resultChannel = Channel<ExecutionResultNotification>(capacity = Channel.BUFFERED)
+
+    @OptIn(DelicateCoroutinesApi::class)
+    @PostConstruct
+    private fun startResultProcessors() {
+        val workers = 4 // tune as needed
+        repeat(workers) { idx ->
+            appScope.launch(Dispatchers.IO + Context.current().asContextElement()) {
+                val ch: ReceiveChannel<ExecutionResultNotification> = resultChannel
+                logger.info("Result processor-{} started", idx)
+                while (isActive && !ch.isClosedForReceive) {
+                    try {
+                        val batch = consumeBatch(ch, maxSize = 50, maxWaitMillis = 100)
+                        if (batch.isEmpty()) continue
+                        processBatch(batch)
+                        logger.info("Processed DB update batch size={}", batch.size)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        logger.error("Error in result processing batch: {}", e.message, e)
+                    }
+                }
+            }
+        }
+        logger.info("Started {} background result processors", workers)
+    }
+
+    private suspend fun consumeBatch(
+        channel: ReceiveChannel<ExecutionResultNotification>,
+        maxSize: Int,
+        maxWaitMillis: Long,
+    ): List<ExecutionResultNotification> {
+        val batch = ArrayList<ExecutionResultNotification>(maxSize)
+        val first = withTimeoutOrNull(maxWaitMillis) { channel.receive() }
+        if (first != null) {
+            batch.add(first)
+            while (batch.size < maxSize) {
+                val next = channel.tryReceive().getOrNull() ?: break
+                batch.add(next)
+            }
+        }
+        return batch
+    }
+
+    @Transactional
+    internal fun processBatch(batch: List<ExecutionResultNotification>) {
+        if (batch.isEmpty()) return
+        val jobIds = batch.mapNotNull { runCatching { UUID.fromString(it.jobId) }.getOrNull() }
+        if (jobIds.isEmpty()) return
+        val jobs = executionJobRepository.findAllByJobIdIn(jobIds)
+        if (jobs.isEmpty()) return
+        val byId = jobs.associateBy { it.jobId }
+        batch.forEach { result ->
+            val id = runCatching { UUID.fromString(result.jobId) }.getOrNull() ?: return@forEach
+            val job = byId[id] ?: return@forEach
+            if (job.status != JobStatus.PENDING) return@forEach
+            job.status = result.status
+            if (job.startExecutionTime == null) job.startExecutionTime = result.startTime
+            job.endExecutionTime = result.endTime
+            job.programOutput = result.action
+            job.programStderr = result.programStderr
+            job.cpuTimeSeconds = result.cpuTimeSeconds
+            job.memoryKb = result.memoryKb
+            job.exitCode = result.exitCode
+            job.sandboxLogRef = result.sandboxLogRef
+            job.errorDetails = result.errorDetails
+            job.workerNodeId = result.workerNodeId
+        }
+        executionJobRepository.saveAll(jobs)
+    }
 
     private fun jobOutcomeCounter(status: JobStatus) =
         meterRegistry.counter(
@@ -147,10 +222,12 @@ class ExecuteService(
                 var sandboxLogContent: String? =
                     null // Store log content if needed for debugging or result
                 var errorDetails: String? = null
+                var programStderr: String? = null
                 // Set when we decide to upload logs (failure or sampled success)
                 val logFileKey = "logs/$aiOwnerUserId/$jobId/nsjail.log"
                 var finalLogRef: String? = null
                 val startTime = Instant.now()
+                var resultNotification: ExecutionResultNotification? = null
 
                 // Initialize previousMemoryData
                 var previousMemoryData = "" // Default to empty string
@@ -160,12 +237,14 @@ class ExecuteService(
                         "session:${sessionId}:memory:${aiOwnerUserId}:${previousTickNumber}"
                     try {
                         previousMemoryData =
-                            tracer.withSpan("redis.get_memory") {
-                                Span.current().apply {
-                                    setAttribute("session.id", sessionId)
-                                    setAttribute("tick.number", previousTickNumber.toLong())
+                            withContext(Dispatchers.IO + Context.current().asContextElement()) {
+                                tracer.withSpan("redis.get_memory") {
+                                    Span.current().apply {
+                                        setAttribute("session.id", sessionId)
+                                        setAttribute("tick.number", previousTickNumber.toLong())
+                                    }
+                                    redisTemplate.opsForValue().get(redisKey) ?: ""
                                 }
-                                redisTemplate.opsForValue().get(redisKey) ?: ""
                             }
                         logger.info(
                             "Retrieved previous memory for job {} from Redis key {}",
@@ -180,15 +259,8 @@ class ExecuteService(
                             redisKey,
                             e,
                         )
-                        // Fail the job as per requirements
-                        updateJobStatus(
-                            jobId,
-                            JobStatus.ERROR,
-                            errorDetails =
-                                "Failed to read previous memory from Redis: ${e.message}",
-                            endTime = Instant.now(),
-                        )
-                        resultNotifier.notifyExecutionResult(
+                        // Prepare async result; background processor will persist/notify
+                        resultNotification =
                             ExecutionResultNotification(
                                 jobId = jobId,
                                 userId = aiOwnerUserId,
@@ -199,9 +271,10 @@ class ExecuteService(
                                 memoryKb = null,
                                 exitCode = null,
                                 action = null,
+                                programStderr = null,
                                 newMemoryData = null,
                                 errorDetails =
-                                    "Failed to read previous memory from Redis for job $jobId: ${e.message}", // No log to upload
+                                    "Failed to read previous memory from Redis for job $jobId: ${e.message}",
                                 sandboxLogRef = null,
                                 clientRequestId = request.clientRequestId,
                                 workerNodeId = applicationConfig.nodeId,
@@ -209,7 +282,6 @@ class ExecuteService(
                                 startTime = startTime,
                                 endTime = Instant.now(),
                             )
-                        )
                         throw RuntimeException(
                             "Failed to read previous memory from Redis for job $jobId",
                             e,
@@ -222,7 +294,7 @@ class ExecuteService(
                         if (previousMemoryData.isNotBlank())
                             Base64.getDecoder().decode(previousMemoryData)
                         else byteArrayOf()
-                    } catch (e: IllegalArgumentException) {
+                    } catch (_: IllegalArgumentException) {
                         logger.warn(
                             "Previous memory data for job {} is not valid Base64, using empty.",
                             jobId,
@@ -231,44 +303,31 @@ class ExecuteService(
                     }
 
                 try {
-                    // Ensure execution directory exists (skip DB RUNNING state to reduce writes)
-                    tracer.withSuspendingSpan(
-                        "fs.setup_exec_dir",
-                        ctx = Dispatchers.IO + Context.current().asContextElement(),
-                    ) {
-                        try {
-                            Files.createDirectories(executionDir)
-                        } catch (e: IOException) {
-                            logger.error(
-                                "Failed to create execution directory for job {}: {}",
-                                jobId,
-                                e.message,
-                            )
-                            throw RuntimeException("IO error during execution preparation", e)
+                    withContext(Dispatchers.IO + Context.current().asContextElement()) {
+                        // a) Ensure execution directory exists
+                        tracer.withSpan("fs.setup_exec_dir") {
+                            try {
+                                Files.createDirectories(executionDir)
+                            } catch (e: IOException) {
+                                logger.error(
+                                    "Failed to create execution directory for job {}: {}",
+                                    jobId,
+                                    e.message,
+                                )
+                                throw RuntimeException("IO error during execution preparation", e)
+                            }
                         }
-                    }
 
-                    // 3. Get Program Path (from cache or download from MinIO)
-                    // This function handles cache checking and download internally
-                    val programPathInCache =
-                        tracer.withSuspendingSpan("cache.get_program") {
-                            // annotate cache span with lookup key and user
-                            Span.current().setAttribute("object.key", minioObjectKey)
-                            Span.current().setAttribute("user.id", aiOwnerUserId)
-                            cacheManager.getProgramPath(aiOwnerUserId, minioObjectKey)
-                        }
-                    if (programPathInCache == null || !Files.exists(programPathInCache)) {
-                        logger.error(
-                            "Failed to obtain program binary for user {} (job {})",
-                            aiOwnerUserId,
-                            jobId,
-                        )
-                        throw RuntimeException("Could not get program binary") // Critical failure
-                    }
-                    // Copy program and prepare input file under one span
-                    tracer.withSuspendingSpan("fs.prepare_files") {
-                        // Copy the cached program into the job-specific execution dir
-                        withContext(Dispatchers.IO + Context.current().asContextElement()) {
+                        // b) Get program from cache/MinIO
+                        val programPathInCache =
+                            tracer.withSuspendingSpan("cache.get_program") {
+                                Span.current().setAttribute("object.key", minioObjectKey)
+                                Span.current().setAttribute("user.id", aiOwnerUserId)
+                                cacheManager.getProgramPath(aiOwnerUserId, minioObjectKey)
+                            } ?: throw RuntimeException("Could not get program binary")
+
+                        // c) Copy program into execution dir; set perms; and write input file
+                        tracer.withSpan("fs.prepare_files") {
                             try {
                                 Files.copy(
                                     programPathInCache,
@@ -279,41 +338,27 @@ class ExecuteService(
                                     setReadable(true, /* ownerOnly= */ false)
                                     setExecutable(true, /* ownerOnly= */ false)
                                 }
-                                logger.info(
-                                    "Copied program for job {} to execution dir {}",
-                                    jobId,
-                                    programPathInExecDir,
-                                )
-                            } catch (e: Exception) {
-                                logger.error(
-                                    "Failed to copy program to execution dir for job {}: {}",
-                                    jobId,
-                                    e.message,
-                                )
-                                throw RuntimeException("Failed to prepare program for execution", e)
-                            }
-                        }
 
-                        // Prepare Input File
-                        withContext(Dispatchers.IO + Context.current().asContextElement()) {
-                            try {
                                 val aiInputContentBytes =
                                     request.inputData.toByteArray() +
                                         "\n".toByteArray() +
                                         decodedPreviousMemory
                                 Files.write(inputFile, aiInputContentBytes)
+
                                 logger.info(
-                                    "Prepared input file for job {} at {}",
+                                    "Prepared input and copied program for job {} ({} -> {}), dir {}",
                                     jobId,
-                                    inputFile,
+                                    programPathInCache,
+                                    programPathInExecDir,
+                                    executionDir,
                                 )
                             } catch (e: IOException) {
                                 logger.error(
-                                    "Failed to write input file for job {}: {}",
+                                    "Failed to prepare files for job {}: {}",
                                     jobId,
                                     e.message,
                                 )
-                                throw RuntimeException("IO error writing input file", e)
+                                throw RuntimeException("IO error preparing files", e)
                             }
                         }
                     }
@@ -360,6 +405,7 @@ class ExecuteService(
 
                     // Process Nsjail Result
                     exitCode = nsjailResult.exitCode
+                    programStderr = nsjailResult.programStderr
                     // programOutput is now split into action and newMemoryData
                     // programOutput = nsjailResult.output // Old way
                     sandboxLogContent = nsjailResult.logContent // Store for potential use/debugging
@@ -518,7 +564,11 @@ class ExecuteService(
                         // Failure: schedule async log upload and set ref
                         if (Files.exists(logFile)) {
                             finalLogRef = logFileKey
-                            scheduleAsyncLogUpload(logFileKey, logFile)
+                            scheduleAsyncLogUpload(
+                                logFileKey,
+                                runCatching { Files.readAllBytes(logFile) }
+                                    .getOrElse { ByteArray(0) },
+                            )
                         }
                     } else {
                         logger.info(
@@ -532,7 +582,11 @@ class ExecuteService(
                         // Optional sampling for successful logs
                         if (shouldSampleSuccessLog() && Files.exists(logFile)) {
                             finalLogRef = logFileKey
-                            scheduleAsyncLogUpload(logFileKey, logFile)
+                            scheduleAsyncLogUpload(
+                                logFileKey,
+                                runCatching { Files.readAllBytes(logFile) }
+                                    .getOrElse { ByteArray(0) },
+                            )
                         }
                     }
                 } catch (e: TimeoutCancellationException) {
@@ -548,9 +602,33 @@ class ExecuteService(
                     // On failure, schedule async log upload
                     if (Files.exists(logFile)) {
                         finalLogRef = logFileKey
-                        scheduleAsyncLogUpload(logFileKey, logFile)
+                        scheduleAsyncLogUpload(
+                            logFileKey,
+                            runCatching { Files.readAllBytes(logFile) }.getOrElse { ByteArray(0) },
+                        )
                     }
-                    // Re-throw
+                    // Prepare async result for timeout and rethrow to NACK
+                    resultNotification =
+                        ExecutionResultNotification(
+                            jobId = jobId,
+                            userId = aiOwnerUserId,
+                            status = currentStatus,
+                            sessionId = sessionId,
+                            tickNumber = tickNumber,
+                            cpuTimeSeconds = cpuTimeSeconds,
+                            memoryKb = memoryKb,
+                            exitCode = exitCode,
+                            action = action.takeIf { it.isNotBlank() },
+                            programStderr = programStderr,
+                            newMemoryData = null,
+                            errorDetails = errorDetails.takeUnless { it.isNullOrBlank() },
+                            sandboxLogRef = finalLogRef,
+                            clientRequestId = request.clientRequestId,
+                            workerNodeId = applicationConfig.nodeId,
+                            submitTime = request.timestamp,
+                            startTime = startTime,
+                            endTime = Instant.now(),
+                        )
                     throw e
                 } catch (e: Exception) {
                     logger.error(
@@ -565,41 +643,40 @@ class ExecuteService(
                     // On failure, schedule async log upload
                     if (Files.exists(logFile)) {
                         finalLogRef = logFileKey
-                        scheduleAsyncLogUpload(logFileKey, logFile)
+                        scheduleAsyncLogUpload(
+                            logFileKey,
+                            runCatching { Files.readAllBytes(logFile) }.getOrElse { ByteArray(0) },
+                        )
                     }
-                    // Re-throw to ensure NACK
-                    throw e
-                } finally {
-                    jobOutcomeCounter(currentStatus).increment()
-
-                    // Final DB Update
-                    tracer.withSuspendingSpan("db.update_job", ctx = Dispatchers.IO) {
-                        Span.current().apply {
-                            setAttribute("job.id", jobId)
-                            setAttribute("job.status", currentStatus.name)
-                        }
-                        updateJobStatus(
+                    // Prepare async result and rethrow to ensure NACK
+                    resultNotification =
+                        ExecutionResultNotification(
                             jobId = jobId,
+                            userId = aiOwnerUserId,
                             status = currentStatus,
-                            startTime = startTime,
-                            endTime = Instant.now(),
-                            programOutput = action,
+                            sessionId = sessionId,
+                            tickNumber = tickNumber,
                             cpuTimeSeconds = cpuTimeSeconds,
                             memoryKb = memoryKb,
                             exitCode = exitCode,
+                            action = action.takeIf { it.isNotBlank() },
+                            programStderr = programStderr,
+                            newMemoryData = null,
+                            errorDetails = errorDetails.takeUnless { it.isNullOrBlank() },
                             sandboxLogRef = finalLogRef,
-                            errorDetails = errorDetails,
+                            clientRequestId = request.clientRequestId,
+                            workerNodeId = applicationConfig.nodeId,
+                            submitTime = request.timestamp,
+                            startTime = startTime,
+                            endTime = Instant.now(),
                         )
-                    }
-
-                    // Notify result
-                    tracer.withSuspendingSpan("amqp.notify_result", ctx = Dispatchers.IO) {
-                        Span.current().apply {
-                            setAttribute("job.id", jobId)
-                            setAttribute("job.status", currentStatus.name)
-                        }
-                        resultNotifier.notifyExecutionResult(
-                            ExecutionResultNotification(
+                    throw e
+                } finally {
+                    jobOutcomeCounter(currentStatus).increment()
+                    // Ensure result built
+                    resultNotification =
+                        resultNotification
+                            ?: ExecutionResultNotification(
                                 jobId = jobId,
                                 userId = aiOwnerUserId,
                                 status = currentStatus,
@@ -609,6 +686,7 @@ class ExecuteService(
                                 memoryKb = memoryKb,
                                 exitCode = exitCode,
                                 action = action.takeIf { it.isNotBlank() },
+                                programStderr = programStderr,
                                 newMemoryData =
                                     if (currentStatus == JobStatus.SUCCESS) memoryDataForRedis
                                     else null,
@@ -620,26 +698,31 @@ class ExecuteService(
                                 startTime = startTime,
                                 endTime = Instant.now(),
                             )
-                        )
-                    }
-
-                    // Cleanup execution-specific directory (input, log)
-                    tracer.withSuspendingSpan("fs.cleanup", ctx = Dispatchers.IO + NonCancellable) {
-                        try {
-                            if (Files.exists(executionDir)) {
-                                deleteDirectoryRecursively(executionDir)
-                                logger.info(
-                                    "Cleaned up execution directory for job {}: {}",
+                    // Group notify + enqueue + cleanup in a single IO context to minimize switches
+                    withContext(Dispatchers.IO + NonCancellable) {
+                        tracer.withSuspendingSpan("amqp.notify_result") {
+                            resultNotifier.notifyExecutionResult(resultNotification!!)
+                        }
+                        tracer.withSuspendingSpan("async.enqueue_result") {
+                            resultChannel.send(resultNotification!!)
+                        }
+                        tracer.withSuspendingSpan("fs.cleanup") {
+                            try {
+                                if (Files.exists(executionDir)) {
+                                    deleteDirectoryRecursively(executionDir)
+                                    logger.info(
+                                        "Cleaned up execution directory for job {}: {}",
+                                        jobId,
+                                        executionDir,
+                                    )
+                                }
+                            } catch (e: Exception) {
+                                logger.error(
+                                    "Failed to cleanup execution directory or program for job {}: {}",
                                     jobId,
-                                    executionDir,
+                                    e.message,
                                 )
                             }
-                        } catch (e: Exception) {
-                            logger.error(
-                                "Failed to cleanup execution directory or program for job {}: {}",
-                                jobId,
-                                e.message,
-                            )
                         }
                     }
                 }
@@ -653,18 +736,25 @@ class ExecuteService(
         return Random.nextDouble() < successLogSampleRate
     }
 
-    private fun scheduleAsyncLogUpload(objectKey: String, filePath: Path) {
-        // Read the file eagerly to avoid races with cleanup
-        val data =
-            runCatching { Files.readAllBytes(filePath) }
-                .getOrElse {
-                    logger.error(
-                        "Read log file failed before async upload {}: {}",
-                        objectKey,
-                        it.message,
-                    )
-                    return
-                }
+    private suspend fun updateJobStatusFromResult(result: ExecutionResultNotification) {
+        tracer.withSuspendingSpan("db.update_job_from_result", ctx = Dispatchers.IO) {
+            updateJobStatus(
+                jobId = result.jobId,
+                status = result.status,
+                startTime = result.startTime,
+                endTime = result.endTime,
+                programOutput = result.action,
+                programStderr = result.programStderr,
+                cpuTimeSeconds = result.cpuTimeSeconds,
+                memoryKb = result.memoryKb,
+                exitCode = result.exitCode,
+                sandboxLogRef = result.sandboxLogRef,
+                errorDetails = result.errorDetails,
+            )
+        }
+    }
+
+    private fun scheduleAsyncLogUpload(objectKey: String, data: ByteArray) {
         appScope.launch(Dispatchers.IO + Context.current().asContextElement()) {
             try {
                 tracer.withSuspendingSpan("minio.upload_log.async") {
@@ -730,6 +820,7 @@ class ExecuteService(
         var processOutput = ""
         var exitCode = -1
         var logContent = ""
+        var programStderr = ""
 
         try {
             // Execute within IO context
@@ -766,6 +857,9 @@ class ExecuteService(
                         }
                         exitCode = -9
                         processOutput = outputGobbler.await().take(10 * 1024)
+                        // Capture child's stderr emitted before kill
+                        programStderr = errorGobbler.await().take(10 * 1024)
+                        // Read nsjail log file content
                         logContent =
                             tracer.withSuspendingSpan(
                                 "nsjail.read_log_on_timeout",
@@ -779,11 +873,15 @@ class ExecuteService(
 
                     exitCode = process.exitValue()
                     processOutput = outputGobbler.await().take(10 * 1024)
-                    val nsjailErrors = errorGobbler.await()
-                    if (nsjailErrors.isNotBlank()) {
-                        logger.warn("Nsjail stderr for job {}: {}", jobId, nsjailErrors)
+                    programStderr = errorGobbler.await().take(10 * 1024)
+                    if (programStderr.isNotBlank()) {
+                        logger.debug(
+                            "Program stderr for job {}: {}",
+                            jobId,
+                            programStderr.take(500),
+                        )
                     }
-
+                    // Read nsjail log from file
                     logContent =
                         tracer.withSuspendingSpan("nsjail.read_log", ctx = Dispatchers.IO) {
                             runCatching { Files.readString(logFilePath) }
@@ -797,6 +895,7 @@ class ExecuteService(
                 exitCode = -1,
                 output = "",
                 logContent = "Failed to start nsjail: ${ioe.message}",
+                programStderr = "",
                 timedOut = false,
             )
         } catch (e: Exception) {
@@ -810,6 +909,7 @@ class ExecuteService(
                 exitCode = -1,
                 output = "",
                 logContent = "Internal error during nsjail execution: ${e.message}",
+                programStderr = "",
                 timedOut = false,
             )
         }
@@ -818,6 +918,7 @@ class ExecuteService(
             exitCode = exitCode,
             output = processOutput,
             logContent = logContent,
+            programStderr = programStderr,
             timedOut = (exitCode == -9),
         )
     }
@@ -953,6 +1054,7 @@ class ExecuteService(
                         result.timedOut -> "Wall Clock Time Limit Exceeded (Process Timeout)"
                         result.exitCode == 152 || result.exitCode == (128 + SIGXCPU) ->
                             "CPU Time Limit Exceeded (SIGXCPU)"
+
                         result.exitCode == 137 || result.exitCode == (128 + SIGKILL) -> {
                             if (isWallClockTimeout(result.logContent)) {
                                 "Wall Clock Time Limit Exceeded"
@@ -983,6 +1085,7 @@ class ExecuteService(
         startTime: Instant? = null,
         endTime: Instant? = null,
         programOutput: String? = null,
+        programStderr: String? = null,
         cpuTimeSeconds: Double? = null,
         memoryKb: Long? = null,
         exitCode: Int? = null,
@@ -999,6 +1102,7 @@ class ExecuteService(
                         startTime = startTime,
                         endTime = endTime,
                         programOutput = programOutput,
+                        programStderr = programStderr,
                         cpuTimeSeconds = cpuTimeSeconds,
                         memoryKb = memoryKb,
                         exitCode = exitCode,
@@ -1030,6 +1134,7 @@ class ExecuteService(
         val exitCode: Int?,
         val output: String,
         val logContent: String,
+        val programStderr: String,
         val timedOut: Boolean = false,
     )
 
