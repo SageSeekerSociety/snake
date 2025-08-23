@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import io.opentelemetry.api.OpenTelemetry
 import io.opentelemetry.context.propagation.ContextPropagators
+import java.time.Instant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
@@ -27,7 +28,7 @@ class DefaultTaskProcessor(
 
     private val logger = LoggerFactory.getLogger(DefaultTaskProcessor::class.java)
 
-    override suspend fun processMessage(message: Message) {
+    override suspend fun processMessage(message: Message, deliveredTs: Instant) {
         val messageProperties = message.messageProperties
         val messageBody = String(message.body, Charsets.UTF_8) // Assume UTF-8 encoding
         val correlationId = messageProperties.correlationId // Use correlationId as jobId
@@ -77,7 +78,7 @@ class DefaultTaskProcessor(
                 AmqpConstants.MESSAGE_TYPE_EXECUTE -> {
                     val request: ExecutionRequest = parseMessageBody(messageBody, correlationId)
                     withContext(Dispatchers.IO) {
-                        executeService.processExecutionRequest(request, correlationId)
+                        executeService.processExecutionRequest(request, correlationId, deliveredTs)
                     }
                     logger.info(
                         "Successfully processed execution request for JobId: {}",
