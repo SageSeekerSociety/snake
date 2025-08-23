@@ -54,15 +54,24 @@ class ResultNotifier(
         sendNotification(notification, AmqpConstants.MESSAGE_TYPE_COMPILE_RESULT, jobId.toString())
     }
 
-    suspend fun notifyExecutionResult(notification: ExecutionResultNotification) {
+    suspend fun notifyExecutionResult(
+        notification: ExecutionResultNotification,
+        headers: Map<String, Any?> = emptyMap(),
+    ) {
         sendNotification(
             notification,
             AmqpConstants.MESSAGE_TYPE_EXECUTE_RESULT,
             notification.jobId,
+            headers,
         )
     }
 
-    private suspend fun <T : Any> sendNotification(payload: T, messageType: String, jobId: String) {
+    private suspend fun <T : Any> sendNotification(
+        payload: T,
+        messageType: String,
+        jobId: String,
+        headers: Map<String, Any?> = emptyMap(),
+    ) {
         try {
             // Send notification on IO dispatcher
             withContext(Dispatchers.IO) {
@@ -71,6 +80,8 @@ class ResultNotifier(
                     message.messageProperties.correlationId = jobId // Use original jobId
                     message.messageProperties.headers[AmqpConstants.HEADER_MESSAGE_TYPE] =
                         messageType
+                    // Merge custom headers
+                    headers.forEach { (k, v) -> message.messageProperties.headers[k] = v }
 
                     propagators.textMapPropagator.inject(
                         Context.current(),

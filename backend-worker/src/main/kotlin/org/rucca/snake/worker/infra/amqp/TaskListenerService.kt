@@ -45,6 +45,7 @@ class TaskListenerService(
     private fun handleMessage(message: Message, operation: String): CompletableFuture<Void?> {
         val props = message.messageProperties
         val jobId = props.correlationId ?: "[unknown_jobId-${props.deliveryTag}]"
+        val deliveredTs = java.time.Instant.now()
 
         val extracted: Context = propagator.extract(Context.current(), message, AmqpGetter)
 
@@ -80,7 +81,7 @@ class TaskListenerService(
         return applicationScope.future(ctxWithConsumer.asContextElement()) {
             ctxWithConsumer.makeCurrent().use { _: Scope ->
                 try {
-                    taskProcessor.processMessage(message)
+                    taskProcessor.processMessage(message, deliveredTs)
 
                     consumerSpan.setStatus(StatusCode.OK)
                     logger.info("Successfully processed {} task for jobId={}", operation, jobId)

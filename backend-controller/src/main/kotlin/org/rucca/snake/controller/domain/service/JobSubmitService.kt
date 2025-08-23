@@ -455,6 +455,7 @@ class JobSubmitService(
         finalSessionId: String,
         requestingUserId: Long,
     ) {
+        val publishTs = java.time.Instant.now()
         val request =
             ExecutionRequest(
                 jobId = savedJob.jobId.toString(),
@@ -464,12 +465,11 @@ class JobSubmitService(
                 memoryLimitKb = item.memoryLimitKb,
                 wallTimeLimitSeconds = item.wallTimeLimitSeconds,
                 clientRequestId = item.clientRequestId,
-                timestamp = savedJob.submitTime,
+                timestamp = publishTs,
                 sessionId = finalSessionId,
                 tickNumber = item.tickNumber,
                 requestingUserId = requestingUserId,
             )
-
         sendWithTracing(
             operation = "execute",
             exchange = requestsExchangeName,
@@ -481,6 +481,8 @@ class JobSubmitService(
             message.messageProperties.headers[AmqpConstants.HEADER_MESSAGE_TYPE] =
                 AmqpConstants.MESSAGE_TYPE_EXECUTE
             item.clientRequestId?.let { message.messageProperties.headers["clientRequestId"] = it }
+            // Add publish timestamp header (ISO-8601)
+            message.messageProperties.headers["execute.pub_ts"] = publishTs.toString()
             message
         }
     }

@@ -226,7 +226,7 @@ class AmqpConfig {
     @Bean("autoAckRabbitListenerContainerFactory")
     fun autoAckRabbitListenerContainerFactory(
         connectionFactory: ConnectionFactory,
-        jsonMessageConverter: MessageConverter
+        jsonMessageConverter: MessageConverter,
     ): RabbitListenerContainerFactory<SimpleMessageListenerContainer> {
         val f = SimpleRabbitListenerContainerFactory()
         f.setConnectionFactory(connectionFactory)

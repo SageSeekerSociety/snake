@@ -32,7 +32,7 @@ class CacheEvictionListener(private val cacheManager: CacheManager) {
                         ),
                     key = [""],
                 )
-            ]
+            ],
     )
     fun onCacheEvict(message: CacheEvictMessage) {
         try {

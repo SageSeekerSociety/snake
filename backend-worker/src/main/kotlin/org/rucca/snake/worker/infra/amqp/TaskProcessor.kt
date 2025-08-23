@@ -1,5 +1,6 @@
 package org.rucca.snake.worker.infra.amqp
 
+import java.time.Instant
 import org.springframework.amqp.core.Message
 
 /** Interface for processing tasks received from the message queue. */
@@ -14,5 +15,5 @@ interface TaskProcessor {
      * @throws Exception if processing fails critically and the message should be NACKed (or
      *   potentially retried/sent to DLQ).
      */
-    suspend fun processMessage(message: Message)
+    suspend fun processMessage(message: Message, deliveredTs: Instant)
 }

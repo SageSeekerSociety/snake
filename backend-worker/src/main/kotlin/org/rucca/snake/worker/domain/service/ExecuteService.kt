@@ -12,7 +12,10 @@ import io.opentelemetry.context.Context
 import io.opentelemetry.extension.kotlin.asContextElement
 import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -20,6 +23,7 @@ import java.time.Duration
 import java.time.Instant
 import java.util.*
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import java.util.regex.Pattern
 import kotlin.random.Random
 import kotlinx.coroutines.*
@@ -43,10 +47,6 @@ import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.stereotype.Service
 import org.springframework.transaction.support.TransactionTemplate
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
-import java.io.InputStream
-import java.util.concurrent.atomic.AtomicLong
 
 @Service
 class ExecuteService(
@@ -81,50 +81,47 @@ class ExecuteService(
     private val enqueueDroppedCounter: Counter =
         meterRegistry.counter("db_enqueue.results.total", "status", "dropped")
 
-    private val batchProcessTimer: Timer =
-        meterRegistry.timer("db_process.batch.duration")
+    private val batchProcessTimer: Timer = meterRegistry.timer("db_process.batch.duration")
 
     private val batchProcessSizeSummary: DistributionSummary =
         meterRegistry.summary("db_process.batch.size")
 
     // Buffered channel to decouple DB/MQ from the critical path
-    private val resultChannel = Channel<ExecutionResultNotification>(capacity = RESULT_CHANNEL_CAPACITY)
+    private val resultChannel =
+        Channel<ExecutionResultNotification>(capacity = RESULT_CHANNEL_CAPACITY)
 
     private var resultProcessors: List<Job> = emptyList()
 
     @OptIn(DelicateCoroutinesApi::class)
     @PostConstruct
     private fun startResultProcessors() {
-        meterRegistry.gauge(
-            "nsjail.permits.available",
-            nsjailSemaphore,
-        ) { it.availablePermits.toDouble() }
+        meterRegistry.gauge("nsjail.permits.available", nsjailSemaphore) {
+            it.availablePermits.toDouble()
+        }
 
-        meterRegistry.gauge(
-            "db_enqueue.channel.occupancy.ratio",
-            channelOccupancy
-        ) { it.get().toDouble() / RESULT_CHANNEL_CAPACITY }
+        meterRegistry.gauge("db_enqueue.channel.occupancy.ratio", channelOccupancy) {
+            it.get().toDouble() / RESULT_CHANNEL_CAPACITY
+        }
 
         val workers = 8
-        resultProcessors = (0 until workers).map { idx ->
-            appScope.launch(Dispatchers.IO + Context.current().asContextElement()) {
-                val ch: ReceiveChannel<ExecutionResultNotification> = resultChannel
-                logger.info("Result processor-{} started", idx)
-                while (isActive && !ch.isClosedForReceive) {
-                    try {
-                        val batch = consumeBatch(ch, maxSize = 50, maxWaitMillis = 100)
-                        if (batch.isEmpty()) continue
-                        batchProcessSizeSummary.record(batch.size.toDouble())
-                        batchProcessTimer.recordSuspendable {
-                            processBatch(batch)
+        resultProcessors =
+            (0 until workers).map { idx ->
+                appScope.launch(Dispatchers.IO + Context.current().asContextElement()) {
+                    val ch: ReceiveChannel<ExecutionResultNotification> = resultChannel
+                    logger.info("Result processor-{} started", idx)
+                    while (isActive && !ch.isClosedForReceive) {
+                        try {
+                            val batch = consumeBatch(ch, maxSize = 50, maxWaitMillis = 100)
+                            if (batch.isEmpty()) continue
+                            batchProcessSizeSummary.record(batch.size.toDouble())
+                            batchProcessTimer.recordSuspendable { processBatch(batch) }
+                            logger.info("Processed DB update batch size={}", batch.size)
+                        } catch (e: Exception) {
+                            logger.error("Error in result processing batch", e)
                         }
-                        logger.info("Processed DB update batch size={}", batch.size)
-                    } catch (e: Exception) {
-                        logger.error("Error in result processing batch", e)
                     }
                 }
             }
-        }
         logger.info("Started {} background result processors", workers)
     }
 
@@ -155,7 +152,8 @@ class ExecuteService(
         transactionTemplate.executeWithoutResult {
             if (batch.isEmpty()) return@executeWithoutResult
 
-            val sql = """
+            val sql =
+                """
             UPDATE snake.execution_jobs
             SET status = ?,
                 end_execution_time = (?::timestamp),
@@ -168,45 +166,53 @@ class ExecuteService(
                 error_details = ?,
                 worker_node_id = ?
             WHERE job_id = (?::uuid) AND status = 'PENDING'
-            """.trimIndent()
+            """
+                    .trimIndent()
 
-            val batchArgs: List<Array<Any?>> = batch.map { r ->
-                arrayOf(
-                    r.status.name,
-                    r.endTime.let { java.sql.Timestamp.from(it) },
-                    r.action,
-                    r.programStderr,
-                    r.cpuTimeSeconds,
-                    r.memoryKb,
-                    r.exitCode,
-                    r.sandboxLogRef,
-                    r.errorDetails,
-                    r.workerNodeId,
-                    UUID.fromString(r.jobId)
-                )
-            }
-
-            val updateCounts = try {
-                jdbcTemplate.batchUpdate(sql, batchArgs)
-            } catch (ex: org.springframework.dao.DataAccessException) {
-                val cause = ex.cause
-                if (cause is org.postgresql.util.PSQLException) {
-                    logger.error("SQLState={}, Message={}, Detail={}, Where={}",
-                        cause.sqlState,
-                        cause.serverErrorMessage?.message,
-                        cause.serverErrorMessage?.detail,
-                        cause.serverErrorMessage?.where
+            val batchArgs: List<Array<Any?>> =
+                batch.map { r ->
+                    arrayOf(
+                        r.status.name,
+                        r.endTime.let { java.sql.Timestamp.from(it) },
+                        r.action,
+                        r.programStderr,
+                        r.cpuTimeSeconds,
+                        r.memoryKb,
+                        r.exitCode,
+                        r.sandboxLogRef,
+                        r.errorDetails,
+                        r.workerNodeId,
+                        UUID.fromString(r.jobId),
                     )
                 }
-                throw ex
-            }
+
+            val updateCounts =
+                try {
+                    jdbcTemplate.batchUpdate(sql, batchArgs)
+                } catch (ex: org.springframework.dao.DataAccessException) {
+                    val cause = ex.cause
+                    if (cause is org.postgresql.util.PSQLException) {
+                        logger.error(
+                            "SQLState={}, Message={}, Detail={}, Where={}",
+                            cause.sqlState,
+                            cause.serverErrorMessage?.message,
+                            cause.serverErrorMessage?.detail,
+                            cause.serverErrorMessage?.where,
+                        )
+                    }
+                    throw ex
+                }
 
             updateCounts.forEachIndexed { index, count ->
                 val result = batch[index]
                 if (count > 0) {
-//                    logger.info("Batch-updated job {} successfully to status {}", result.jobId, result.status)
+                    //                    logger.info("Batch-updated job {} successfully to status
+                    // {}", result.jobId, result.status)
                 } else {
-                    logger.info("Skipped batch-updating job {} (status was not PENDING). This is likely a duplicate.", result.jobId)
+                    logger.info(
+                        "Skipped batch-updating job {} (status was not PENDING). This is likely a duplicate.",
+                        result.jobId,
+                    )
                 }
             }
         }
@@ -226,6 +232,40 @@ class ExecuteService(
             .tag("type", "execute")
             .description("Measures the duration of execution job processing")
             .publishPercentiles(0.5, 0.95, 0.99) // 发布 P50, P95, P99 延迟
+            .publishPercentileHistogram(true)
+            .register(meterRegistry)
+
+    // Latency breakdown timers (registered once)
+    private val publishToDeliveredTimer: Timer =
+        Timer.builder("job.execute.latency.publish_to_delivered")
+            .tag("type", "execute")
+            .description("Time from publish (controller) to delivery (worker listener)")
+            .publishPercentiles(0.5, 0.95, 0.99)
+            .publishPercentileHistogram(true)
+            .register(meterRegistry)
+
+    private val deliveredToStartTimer: Timer =
+        Timer.builder("job.execute.latency.delivered_to_start")
+            .tag("type", "execute")
+            .description("Time from delivery to sandbox start (after permit)")
+            .publishPercentiles(0.5, 0.95, 0.99)
+            .publishPercentileHistogram(true)
+            .register(meterRegistry)
+
+    private val startToDoneTimer: Timer =
+        Timer.builder("job.execute.latency.start_to_done")
+            .tag("type", "execute")
+            .description("Time from sandbox start to sandbox done")
+            .publishPercentiles(0.5, 0.95, 0.99)
+            .publishPercentileHistogram(true)
+            .register(meterRegistry)
+
+    private val publishToDoneTimer: Timer =
+        Timer.builder("job.execute.latency.publish_to_done")
+            .tag("type", "execute")
+            .description("End-to-end time from publish to sandbox done")
+            .publishPercentiles(0.5, 0.95, 0.99)
+            .publishPercentileHistogram(true)
             .register(meterRegistry)
 
     // Regex to parse the custom Cgroup Stats log line
@@ -244,7 +284,11 @@ class ExecuteService(
      * @param request The execution request data.
      * @param jobId The unique job ID.
      */
-    suspend fun processExecutionRequest(request: ExecutionRequest, jobId: String) {
+    suspend fun processExecutionRequest(
+        request: ExecutionRequest,
+        jobId: String,
+        deliveredTs: Instant,
+    ) {
         tracer.withSuspendingSpan("job.execute.process") {
             // Retrieve new fields from request
             val sessionId = request.sessionId
@@ -277,6 +321,15 @@ class ExecuteService(
             val programFileName = "program"
             val programPathInExecDir = executionDir.resolve(programFileName)
             val minioObjectKey = "programs/$aiOwnerUserId/$programFileName" // Key in MinIO
+
+            // Record publish -> delivered immediately
+            runCatching {
+                val p2d = Duration.between(request.timestamp, deliveredTs)
+                if (!p2d.isNegative && !p2d.isZero) publishToDeliveredTimer.record(p2d)
+            }
+
+            var sandboxStartTs: Instant? = null
+            var sandboxDoneTs: Instant? = null
 
             executionTimer.recordSuspendable {
                 var currentStatus = JobStatus.RECEIVED
@@ -441,6 +494,11 @@ class ExecuteService(
                     val waitTimeMs = (System.nanoTime() - startTimeNsjailWait) / 1_000_000.0
                     logger.info("Acquired nsjail permit for job {} in {} ms", jobId, waitTimeMs)
                     Span.current().setAttribute("nsjail.wait_ms", waitTimeMs)
+                    // start_ts: after acquiring permit, before starting sandbox
+                    sandboxStartTs = Instant.now()
+                    runCatching {
+                        deliveredToStartTimer.record(Duration.between(deliveredTs, sandboxStartTs))
+                    }
                     val nsjailResult: NsjailResult =
                         try {
                             tracer.withSuspendingSpan("nsjail.execute") {
@@ -469,6 +527,16 @@ class ExecuteService(
                             nsjailSemaphore.release()
                             logger.info("Released nsjail permit for job {}", jobId)
                         }
+                    // done_ts: right after execution returns
+                    sandboxDoneTs = Instant.now()
+                    runCatching {
+                        sandboxStartTs?.let { st ->
+                            val s2d = Duration.between(st, sandboxDoneTs)
+                            if (!s2d.isNegative && !s2d.isZero) startToDoneTimer.record(s2d)
+                        }
+                        val p2done = Duration.between(request.timestamp, sandboxDoneTs)
+                        if (!p2done.isNegative && !p2done.isZero) publishToDoneTimer.record(p2done)
+                    }
 
                     // Process Nsjail Result
                     exitCode = nsjailResult.exitCode
@@ -685,40 +753,84 @@ class ExecuteService(
                 } finally {
                     jobOutcomeCounter(currentStatus).increment()
 
-                    resultNotification = ExecutionResultNotification(
-                        jobId = jobId,
-                        userId = aiOwnerUserId,
-                        status = currentStatus,
-                        sessionId = sessionId,
-                        tickNumber = tickNumber,
-                        cpuTimeSeconds = cpuTimeSeconds,
-                        memoryKb = memoryKb,
-                        exitCode = exitCode,
-                        action = action.takeIf { it.isNotBlank() },
-                        programStderr = programStderr,
-                        newMemoryData =
-                            if (currentStatus == JobStatus.SUCCESS) memoryDataForRedis
-                            else null,
-                        errorDetails = errorDetails.takeUnless { it.isNullOrBlank() },
-                        sandboxLogRef = finalLogRef,
-                        clientRequestId = request.clientRequestId,
-                        workerNodeId = applicationConfig.nodeId,
-                        submitTime = request.timestamp,
-                        startTime = startTime,
-                        endTime = Instant.now(),
-                    )
+                    resultNotification =
+                        ExecutionResultNotification(
+                            jobId = jobId,
+                            userId = aiOwnerUserId,
+                            status = currentStatus,
+                            sessionId = sessionId,
+                            tickNumber = tickNumber,
+                            cpuTimeSeconds = cpuTimeSeconds,
+                            memoryKb = memoryKb,
+                            exitCode = exitCode,
+                            action = action.takeIf { it.isNotBlank() },
+                            programStderr = programStderr,
+                            newMemoryData =
+                                if (currentStatus == JobStatus.SUCCESS) memoryDataForRedis
+                                else null,
+                            errorDetails = errorDetails.takeUnless { it.isNullOrBlank() },
+                            sandboxLogRef = finalLogRef,
+                            clientRequestId = request.clientRequestId,
+                            workerNodeId = applicationConfig.nodeId,
+                            submitTime = request.timestamp,
+                            startTime = startTime,
+                            endTime = Instant.now(),
+                        )
 
                     // Group notify + enqueue + cleanup in a single IO context to minimize switches
                     withContext(Dispatchers.IO + NonCancellable) {
                         tracer.withSuspendingSpan("amqp.notify_result") {
-                            resultNotifier.notifyExecutionResult(resultNotification)
+                            // Build header timestamps and deltas
+                            val pubTs = request.timestamp
+                            val delTs = deliveredTs
+                            val stTs = sandboxStartTs
+                            val dnTs = sandboxDoneTs
+                            val headers =
+                                buildMap<String, Any?> {
+                                    put("execute.pub_ts", pubTs.toString())
+                                    put("execute.delivered_ts", delTs.toString())
+                                    stTs?.let { put("execute.start_ts", it.toString()) }
+                                    dnTs?.let { put("execute.done_ts", it.toString()) }
+                                    // deltas in milliseconds
+                                    runCatching {
+                                        put(
+                                            "execute.delta_pub_to_delivered_ms",
+                                            java.time.Duration.between(pubTs, delTs).toMillis(),
+                                        )
+                                    }
+                                    runCatching {
+                                        if (stTs != null)
+                                            put(
+                                                "execute.delta_delivered_to_start_ms",
+                                                java.time.Duration.between(delTs, stTs).toMillis(),
+                                            )
+                                    }
+                                    runCatching {
+                                        if (stTs != null && dnTs != null)
+                                            put(
+                                                "execute.delta_start_to_done_ms",
+                                                java.time.Duration.between(stTs, dnTs).toMillis(),
+                                            )
+                                    }
+                                    runCatching {
+                                        if (dnTs != null)
+                                            put(
+                                                "execute.delta_pub_to_done_ms",
+                                                java.time.Duration.between(pubTs, dnTs).toMillis(),
+                                            )
+                                    }
+                                }
+                            resultNotifier.notifyExecutionResult(resultNotification, headers)
                         }
 
                         try {
                             val resultJson = objectMapper.writeValueAsString(resultNotification)
                             logger.info("Execution result for job {}: {}", jobId, resultJson)
                         } catch (e: Exception) {
-                            logger.error("Failed to serialize result notification for job $jobId", e)
+                            logger.error(
+                                "Failed to serialize result notification for job $jobId",
+                                e,
+                            )
                         }
 
                         val enqueued = resultChannel.trySend(resultNotification).isSuccess
@@ -765,9 +877,10 @@ class ExecuteService(
     }
 
     private fun scheduleAsyncLogUpload(objectKey: String, logFile: Path) {
-        val data = Files.newInputStream(logFile).use { inputStream ->
-            readStreamToByteArray(inputStream, 16 * 1024)
-        }
+        val data =
+            Files.newInputStream(logFile).use { inputStream ->
+                readStreamToByteArray(inputStream, 16 * 1024)
+            }
         val fileSize = data.size.toLong()
         appScope.launch(Dispatchers.IO + Context.current().asContextElement()) {
             try {
@@ -871,12 +984,14 @@ class ExecuteService(
                 coroutineScope {
                     val ctx = Context.current()
                     val maxOutputBytes = 16 * 1024 // 10 KB
-                    val outputGobbler = async(Dispatchers.IO + ctx.asContextElement()) {
-                        process.inputStream.use { readStreamToString(it, maxOutputBytes) }
-                    }
-                    val errorGobbler = async(Dispatchers.IO + ctx.asContextElement()) {
-                        process.errorStream.use { readStreamToString(it, maxOutputBytes) }
-                    }
+                    val outputGobbler =
+                        async(Dispatchers.IO + ctx.asContextElement()) {
+                            process.inputStream.use { readStreamToString(it, maxOutputBytes) }
+                        }
+                    val errorGobbler =
+                        async(Dispatchers.IO + ctx.asContextElement()) {
+                            process.errorStream.use { readStreamToString(it, maxOutputBytes) }
+                        }
 
                     val waitTimeoutMillis =
                         TimeUnit.SECONDS.toMillis(request.wallTimeLimitSeconds + 2)
@@ -1117,9 +1232,7 @@ class ExecuteService(
     private fun shutdown() {
         logger.info("Shutting down ExecuteService processors...")
         resultChannel.close()
-        runBlocking {
-            resultProcessors.joinAll()
-        }
+        runBlocking { resultProcessors.joinAll() }
         logger.info("All result processors stopped.")
     }
 
