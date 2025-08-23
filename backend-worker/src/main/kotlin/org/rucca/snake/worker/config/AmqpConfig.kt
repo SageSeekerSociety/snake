@@ -223,6 +223,19 @@ class AmqpConfig {
         // you could create your own class implementing MessagePropertiesConverter here.
     }
 
+    @Bean("autoAckRabbitListenerContainerFactory")
+    fun autoAckRabbitListenerContainerFactory(
+        connectionFactory: ConnectionFactory,
+        jsonMessageConverter: MessageConverter
+    ): RabbitListenerContainerFactory<SimpleMessageListenerContainer> {
+        val f = SimpleRabbitListenerContainerFactory()
+        f.setConnectionFactory(connectionFactory)
+        f.setMessageConverter(jsonMessageConverter)
+        f.setAcknowledgeMode(AcknowledgeMode.AUTO) // at-most-once for broadcast evictions
+        f.setPrefetchCount(16) // small prefetch is fine for tiny messages
+        return f
+    }
+
     @Bean("rabbitListenerContainerFactory")
     fun rabbitListenerContainerFactory(
         connectionFactory: ConnectionFactory,

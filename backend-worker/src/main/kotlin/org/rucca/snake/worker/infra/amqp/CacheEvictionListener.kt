@@ -14,6 +14,7 @@ class CacheEvictionListener(private val cacheManager: CacheManager) {
     private val logger = LoggerFactory.getLogger(CacheEvictionListener::class.java)
 
     @RabbitListener(
+        containerFactory = "autoAckRabbitListenerContainerFactory",
         bindings =
             [
                 QueueBinding(

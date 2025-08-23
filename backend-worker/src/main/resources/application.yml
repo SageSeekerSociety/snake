@@ -19,10 +19,12 @@ spring:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
       ddl-auto: validate # 生产环境推荐使用 validate 或 none，通过 Flyway/Liquibase 管理 Schema
-      jdbc:
-        batch_size: 50
-      order_updates: true
-      order_inserts: true
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 50
+        order_updates: true
+        order_inserts: true
   data:
     redis:
       host: ${REDIS_HOST:localhost} # Or your Redis host

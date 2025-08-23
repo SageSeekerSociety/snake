@@ -16,6 +16,12 @@ spring:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
       ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 50
+        order_updates: true
+        order_inserts: true
   data:
     redis:
       host: ${REDIS_HOST:localhost}
