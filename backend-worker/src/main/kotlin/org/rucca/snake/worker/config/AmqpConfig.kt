@@ -257,7 +257,9 @@ class AmqpConfig {
         cf.setConnectionLimit(connectionPoolMaxSize)
         cf.channelCacheSize = 100
 
-        cf.setConnectionNameStrategy { "worker-consumer-${java.net.InetAddress.getLocalHost().hostName}" }
+        cf.setConnectionNameStrategy {
+            "worker-consumer-${java.net.InetAddress.getLocalHost().hostName}"
+        }
 
         cf.setRequestedHeartBeat(30)
 
