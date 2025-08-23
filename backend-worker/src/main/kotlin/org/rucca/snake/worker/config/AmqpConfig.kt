@@ -53,6 +53,10 @@ class AmqpConfig {
     @Value("\${amqp.queue.results:oj.results.notify}") // 添加对结果队列名的注入
     private lateinit var resultsQueueName: String
 
+    // Cache eviction fanout exchange
+    @Value("\${amqp.exchange.cache:oj.cache.exchange}")
+    private lateinit var cacheExchangeName: String
+
     // --- Listener Configuration ---
     @Value("\${amqp.listener.prefetch:8}") private val prefetchCount: Int = 8
     @Value("\${amqp.listener.concurrency:8}") private val concurrency: Int = 8
@@ -168,6 +172,12 @@ class AmqpConfig {
         @Qualifier("resultsExchange") exchange: DirectExchange, // 确保类型与 resultsExchange Bean 匹配
     ): Binding {
         return BindingBuilder.bind(queue).to(exchange).with(resultRoutingKey)
+    }
+
+    // Fanout exchange for cache eviction (worker declares exchange; queue created by listener)
+    @Bean
+    fun cacheFanoutExchange(): FanoutExchange {
+        return FanoutExchange(cacheExchangeName, true, false)
     }
 
     /**
