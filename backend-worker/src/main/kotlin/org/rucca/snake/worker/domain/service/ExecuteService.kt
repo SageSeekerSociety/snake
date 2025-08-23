@@ -156,33 +156,33 @@ class ExecuteService(
             if (batch.isEmpty()) return@executeWithoutResult
 
             val sql = """
-                UPDATE execution_jobs
-                SET status = ?,
-                    end_execution_time = ?,
-                    program_output = ?,
-                    program_stderr = ?,
-                    cpu_time_seconds = ?,
-                    memory_kb = ?,
-                    exit_code = ?,
-                    sandbox_log_ref = ?,
-                    error_details = ?,
-                    worker_node_id = ?
-                WHERE job_id = ? AND status = 'PENDING';
+            UPDATE snake.execution_jobs
+            SET status = ?,
+                end_execution_time = (?::timestamp),
+                program_output = ?,
+                program_stderr = ?,
+                cpu_time_seconds = (?::double precision),
+                memory_kb = (?::bigint),
+                exit_code = (?::integer),
+                sandbox_log_ref = ?,
+                error_details = ?,
+                worker_node_id = ?
+            WHERE job_id = (?::uuid) AND status = 'PENDING'
             """.trimIndent()
 
-            val batchArgs = batch.map { result ->
-                arrayOf<Any?>(
-                    result.status.name,
-                    result.endTime,
-                    result.action,
-                    result.programStderr,
-                    result.cpuTimeSeconds,
-                    result.memoryKb,
-                    result.exitCode,
-                    result.sandboxLogRef,
-                    result.errorDetails,
-                    result.workerNodeId,
-                    UUID.fromString(result.jobId),
+            val batchArgs: List<Array<Any?>> = batch.map { r ->
+                arrayOf(
+                    r.status.name,
+                    r.endTime.let { java.sql.Timestamp.from(it) },
+                    r.action,
+                    r.programStderr,
+                    r.cpuTimeSeconds,
+                    r.memoryKb,
+                    r.exitCode,
+                    r.sandboxLogRef,
+                    r.errorDetails,
+                    r.workerNodeId,
+                    UUID.fromString(r.jobId)
                 )
             }
 
