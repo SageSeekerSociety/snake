@@ -1,5 +1,8 @@
 package org.rucca.snake.worker.domain.service
 
+import com.fasterxml.jackson.databind.ObjectMapper
+import io.micrometer.core.instrument.Counter
+import io.micrometer.core.instrument.DistributionSummary
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Timer
 import io.opentelemetry.api.OpenTelemetry
@@ -41,6 +44,7 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import java.util.concurrent.atomic.AtomicLong
 
 @Service
 class ExecuteService(
@@ -51,6 +55,7 @@ class ExecuteService(
     private val minioService: MinioService,
     private val redisTemplate: StringRedisTemplate,
     private val meterRegistry: MeterRegistry,
+    private val objectMapper: ObjectMapper,
     openTelemetry: OpenTelemetry,
     @Value("\${memory.ttl.minutes}") private val memoryTtlMinutes: Long,
     @Value("\${memory.max.size.kb}") private val memoryMaxSizeKb: Int,
@@ -71,13 +76,32 @@ class ExecuteService(
             AtomicInteger(applicationConfig.concurrency.nsjailPermits),
         )
 
+    private val channelOccupancy = AtomicLong(0)
+
+    private val enqueueSuccessCounter: Counter =
+        meterRegistry.counter("db_enqueue.results.total", "status", "success")
+
+    private val enqueueDroppedCounter: Counter =
+        meterRegistry.counter("db_enqueue.results.total", "status", "dropped")
+
+    private val batchProcessTimer: Timer =
+        meterRegistry.timer("db_process.batch.duration")
+
+    private val batchProcessSizeSummary: DistributionSummary =
+        meterRegistry.summary("db_process.batch.size")
+
     // Buffered channel to decouple DB/MQ from the critical path
-    private val resultChannel = Channel<ExecutionResultNotification>(capacity = Channel.BUFFERED)
+    private val resultChannel = Channel<ExecutionResultNotification>(capacity = RESULT_CHANNEL_CAPACITY)
 
     @OptIn(DelicateCoroutinesApi::class)
     @PostConstruct
     private fun startResultProcessors() {
-        val workers = 4 // tune as needed
+        meterRegistry.gauge(
+            "db_enqueue.channel.occupancy.ratio",
+            channelOccupancy
+        ) { it.get().toDouble() / RESULT_CHANNEL_CAPACITY }
+
+        val workers = 8
         repeat(workers) { idx ->
             appScope.launch(Dispatchers.IO + Context.current().asContextElement()) {
                 val ch: ReceiveChannel<ExecutionResultNotification> = resultChannel
@@ -86,7 +110,10 @@ class ExecuteService(
                     try {
                         val batch = consumeBatch(ch, maxSize = 50, maxWaitMillis = 100)
                         if (batch.isEmpty()) continue
-                        processBatch(batch)
+                        batchProcessSizeSummary.record(batch.size.toDouble())
+                        batchProcessTimer.recordSuspendable {
+                            processBatch(batch)
+                        }
                         logger.info("Processed DB update batch size={}", batch.size)
                     } catch (e: CancellationException) {
                         throw e
@@ -112,6 +139,9 @@ class ExecuteService(
                 val next = channel.tryReceive().getOrNull() ?: break
                 batch.add(next)
             }
+        }
+        if (batch.isNotEmpty()) {
+            channelOccupancy.addAndGet(-batch.size.toLong())
         }
         return batch
     }
@@ -701,11 +731,29 @@ class ExecuteService(
                     // Group notify + enqueue + cleanup in a single IO context to minimize switches
                     withContext(Dispatchers.IO + NonCancellable) {
                         tracer.withSuspendingSpan("amqp.notify_result") {
-                            resultNotifier.notifyExecutionResult(resultNotification!!)
+                            resultNotifier.notifyExecutionResult(resultNotification)
                         }
-                        tracer.withSuspendingSpan("async.enqueue_result") {
-                            resultChannel.send(resultNotification!!)
+
+                        try {
+                            val resultJson = objectMapper.writeValueAsString(resultNotification)
+                            logger.info("Execution result for job {}: {}", jobId, resultJson)
+                        } catch (e: Exception) {
+                            logger.error("Failed to serialize result notification for job $jobId", e)
                         }
+
+                        val enqueued = resultChannel.trySend(resultNotification).isSuccess
+                        if (enqueued) {
+                            enqueueSuccessCounter.increment()
+                            channelOccupancy.incrementAndGet()
+                        } else {
+                            enqueueDroppedCounter.increment()
+                            // Just drop if the channel is full, it is acceptable.
+                            logger.warn(
+                                "Result channel is full, DB persistence for job {} will be skipped.",
+                                jobId,
+                            )
+                        }
+
                         tracer.withSuspendingSpan("fs.cleanup") {
                             try {
                                 if (Files.exists(executionDir)) {
@@ -1140,12 +1188,12 @@ class ExecuteService(
 
     private data class CgroupStats(val cpuTimeSeconds: Double?, val memoryPeakKb: Long?)
 
-    // Define signal constants if not available easily (check your OS headers or define manually)
     companion object {
         const val SIGXCPU = 24
         const val SIGKILL = 9
         const val SIGSEGV = 11
         const val SIGXFSZ = 25
-        // Add others as needed
+
+        const val RESULT_CHANNEL_CAPACITY = 2048
     }
 }
