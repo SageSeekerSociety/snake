@@ -15,8 +15,7 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import java.time.Duration
 import java.time.Instant
-import java.util.Base64
-import java.util.UUID
+import java.util.*
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.regex.Pattern
@@ -88,18 +87,7 @@ class ExecuteService(
                         val batch = consumeBatch(ch, maxSize = 50, maxWaitMillis = 100)
                         if (batch.isEmpty()) continue
                         processBatch(batch)
-                        batch.forEach { result ->
-                            try {
-                                resultNotifier.notifyExecutionResult(result)
-                            } catch (e: Exception) {
-                                logger.error(
-                                    "AMQP notify failed for job {}: {}",
-                                    result.jobId,
-                                    e.message,
-                                )
-                            }
-                        }
-                        logger.info("Processed result batch size={}", batch.size)
+                        logger.info("Processed DB update batch size={}", batch.size)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -218,7 +206,7 @@ class ExecuteService(
             val inputFile = executionDir.resolve("input.txt")
             val logFile = executionDir.resolve("nsjail.log")
             val programFileName = "program"
-            // Program will no longer be copied into executionDir; bind-mount cached binary instead
+            val programPathInExecDir = executionDir.resolve(programFileName)
             val minioObjectKey = "programs/$aiOwnerUserId/$programFileName" // Key in MinIO
 
             executionTimer.recordSuspendable {
@@ -306,7 +294,7 @@ class ExecuteService(
                         if (previousMemoryData.isNotBlank())
                             Base64.getDecoder().decode(previousMemoryData)
                         else byteArrayOf()
-                    } catch (e: IllegalArgumentException) {
+                    } catch (_: IllegalArgumentException) {
                         logger.warn(
                             "Previous memory data for job {} is not valid Base64, using empty.",
                             jobId,
@@ -315,69 +303,65 @@ class ExecuteService(
                     }
 
                 try {
-                    // --- Combine pre-exec I/O into a single IO context ---
-                    val programPathInCache: Path =
-                        withContext(Dispatchers.IO + Context.current().asContextElement()) {
-                            // a) Ensure execution directory exists
-                            tracer.withSpan("fs.setup_exec_dir") {
-                                try {
-                                    Files.createDirectories(executionDir)
-                                } catch (e: IOException) {
-                                    logger.error(
-                                        "Failed to create execution directory for job {}: {}",
-                                        jobId,
-                                        e.message,
-                                    )
-                                    throw RuntimeException(
-                                        "IO error during execution preparation",
-                                        e,
-                                    )
-                                }
+                    withContext(Dispatchers.IO + Context.current().asContextElement()) {
+                        // a) Ensure execution directory exists
+                        tracer.withSpan("fs.setup_exec_dir") {
+                            try {
+                                Files.createDirectories(executionDir)
+                            } catch (e: IOException) {
+                                logger.error(
+                                    "Failed to create execution directory for job {}: {}",
+                                    jobId,
+                                    e.message,
+                                )
+                                throw RuntimeException("IO error during execution preparation", e)
                             }
-
-                            // b) Get program from cache/MinIO
-                            val programPath =
-                                tracer.withSuspendingSpan("cache.get_program") {
-                                    Span.current().setAttribute("object.key", minioObjectKey)
-                                    Span.current().setAttribute("user.id", aiOwnerUserId)
-                                    cacheManager.getProgramPath(aiOwnerUserId, minioObjectKey)
-                                } ?: throw RuntimeException("Could not get program binary")
-
-                            // c) Ensure cached binary perms; and write input file
-                            tracer.withSpan("fs.prepare_files") {
-                                try {
-                                    val progFile = programPath.toFile()
-                                    if (!progFile.canExecute()) {
-                                        progFile.setExecutable(true, /* ownerOnly= */ false)
-                                    }
-                                    if (!progFile.canRead()) {
-                                        progFile.setReadable(true, /* ownerOnly= */ false)
-                                    }
-
-                                    val aiInputContentBytes =
-                                        request.inputData.toByteArray() +
-                                            "\n".toByteArray() +
-                                            decodedPreviousMemory
-                                    Files.write(inputFile, aiInputContentBytes)
-
-                                    logger.info(
-                                        "Prepared input and using cached program for job {} ({}), dir {}",
-                                        jobId,
-                                        programPath,
-                                        executionDir,
-                                    )
-                                } catch (e: IOException) {
-                                    logger.error(
-                                        "Failed to prepare files for job {}: {}",
-                                        jobId,
-                                        e.message,
-                                    )
-                                    throw RuntimeException("IO error preparing files", e)
-                                }
-                            }
-
-                            programPath // return for outer scope
                         }
+
+                        // b) Get program from cache/MinIO
+                        val programPathInCache =
+                            tracer.withSuspendingSpan("cache.get_program") {
+                                Span.current().setAttribute("object.key", minioObjectKey)
+                                Span.current().setAttribute("user.id", aiOwnerUserId)
+                                cacheManager.getProgramPath(aiOwnerUserId, minioObjectKey)
+                            } ?: throw RuntimeException("Could not get program binary")
+
+                        // c) Copy program into execution dir; set perms; and write input file
+                        tracer.withSpan("fs.prepare_files") {
+                            try {
+                                Files.copy(
+                                    programPathInCache,
+                                    programPathInExecDir,
+                                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                                )
+                                programPathInExecDir.toFile().apply {
+                                    setReadable(true, /* ownerOnly= */ false)
+                                    setExecutable(true, /* ownerOnly= */ false)
+                                }
+
+                                val aiInputContentBytes =
+                                    request.inputData.toByteArray() +
+                                        "\n".toByteArray() +
+                                        decodedPreviousMemory
+                                Files.write(inputFile, aiInputContentBytes)
+
+                                logger.info(
+                                    "Prepared input and copied program for job {} ({} -> {}), dir {}",
+                                    jobId,
+                                    programPathInCache,
+                                    programPathInExecDir,
+                                    executionDir,
+                                )
+                            } catch (e: IOException) {
+                                logger.error(
+                                    "Failed to prepare files for job {}: {}",
+                                    jobId,
+                                    e.message,
+                                )
+                                throw RuntimeException("IO error preparing files", e)
+                            }
+                        }
+                    }
 
                     // Execute in Sandbox (using Semaphore)
                     logger.debug("Job {} WAITING for nsjail permit...", jobId)
@@ -402,14 +386,14 @@ class ExecuteService(
                                     )
                                 Span.current()
                                     .setAttribute("cgroup.mem_max_kb", request.memoryLimitKb)
-                                Span.current().setAttribute("program.path", "/program (bind_ro)")
+                                Span.current()
+                                    .setAttribute("program.path", "execute/$jobId/$programFileName")
                                 runNsjail(
                                     jobId = jobId,
                                     userDataDir = userDataDir, // Chroot target
                                     logFilePath = logFile,
                                     inputFile = inputFile, // Redirect stdin from this file
-                                    programPathInCache = programPathInCache,
-                                    programPathInChroot = "program",
+                                    programPath = "execute/$jobId/$programFileName",
                                     request = request, // Pass request for resource limits
                                 )
                             }
@@ -689,7 +673,7 @@ class ExecuteService(
                     throw e
                 } finally {
                     jobOutcomeCounter(currentStatus).increment()
-                    // Enqueue for async processing (DB + MQ)
+                    // Ensure result built
                     resultNotification =
                         resultNotification
                             ?: ExecutionResultNotification(
@@ -714,11 +698,14 @@ class ExecuteService(
                                 startTime = startTime,
                                 endTime = Instant.now(),
                             )
-                    tracer.withSuspendingSpan("async.enqueue_result") {
-                        resultChannel.send(resultNotification!!)
-                    }
-                    // Always cleanup files
+                    // Group notify + enqueue + cleanup in a single IO context to minimize switches
                     withContext(Dispatchers.IO + NonCancellable) {
+                        tracer.withSuspendingSpan("amqp.notify_result") {
+                            resultNotifier.notifyExecutionResult(resultNotification!!)
+                        }
+                        tracer.withSuspendingSpan("async.enqueue_result") {
+                            resultChannel.send(resultNotification!!)
+                        }
                         tracer.withSuspendingSpan("fs.cleanup") {
                             try {
                                 if (Files.exists(executionDir)) {
@@ -795,8 +782,7 @@ class ExecuteService(
         userDataDir: Path, // The directory to chroot into (/app/data/{userId})
         logFilePath: Path,
         inputFile: Path, // File to redirect stdin from
-        programPathInCache: Path, // Host path for cached program (bind-mount ro)
-        programPathInChroot: String, // Destination path inside chroot (e.g., "program")
+        programPath: String, // Relative path inside chroot (e.g., "program")
         request: ExecutionRequest, // Contains resource limits
     ): NsjailResult {
         val nsjailPath = applicationConfig.nsjail.path
@@ -808,14 +794,8 @@ class ExecuteService(
         // Add dynamic parameters
         command.add("--chroot")
         command.add(userDataDir.toAbsolutePath().toString())
-        // Log to a file so that child's stderr is not mixed with nsjail logs
         command.add("--log")
         command.add(logFilePath.toAbsolutePath().toString())
-
-        // Bind-mount the cached program into the jail as read-only
-        val destInChroot = "/" + programPathInChroot.trimStart('/')
-        command.add("--bindmount_ro")
-        command.add("${programPathInCache.toAbsolutePath()}:$destInChroot")
 
         // Add resource limits from request
         // Convert CPU time limit to seconds for rlimit_cpu (or use time_limit for wall time)
@@ -833,7 +813,7 @@ class ExecuteService(
 
         // Add the command to execute
         command.add("--")
-        command.add(destInChroot) // Execute the program via absolute path inside chroot
+        command.add("./$programPath") // Execute the program relative to the chroot dir
 
         logger.info("Executing nsjail command for job {}: {}", jobId, command.joinToString(" "))
 
@@ -1074,6 +1054,7 @@ class ExecuteService(
                         result.timedOut -> "Wall Clock Time Limit Exceeded (Process Timeout)"
                         result.exitCode == 152 || result.exitCode == (128 + SIGXCPU) ->
                             "CPU Time Limit Exceeded (SIGXCPU)"
+
                         result.exitCode == 137 || result.exitCode == (128 + SIGKILL) -> {
                             if (isWallClockTimeout(result.logContent)) {
                                 "Wall Clock Time Limit Exceeded"

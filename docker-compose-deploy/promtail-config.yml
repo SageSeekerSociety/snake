@@ -60,9 +60,7 @@ scrape_configs:
       #    如果 ts 字段存在（来自JSON或Regex），则用它作为Loki时间戳
       - timestamp:
           source: ts
-          formats:
-            - RFC3339Nano
-            - "2006-01-02 15:04:05.999"
+          format: RFC3339Nano
           action_on_failure: skip # 如果没有可用的 ts，则跳过
 
       # 6) 统一提升关键字段为标签
