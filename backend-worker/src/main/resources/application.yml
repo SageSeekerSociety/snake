@@ -101,6 +101,8 @@ application:
   node-id: ${NODE_ID:worker-1} # Worker 节点 ID，通常用于标识不同的 Worker 实例
 # --- AMQP (RabbitMQ) 配置 ---
 amqp:
+  connection: 3
+  max-connection: 3
   queue:
     compile: oj.compile.tasks # 编译任务队列名
     execute: oj.execute.tasks # 执行任务队列名
