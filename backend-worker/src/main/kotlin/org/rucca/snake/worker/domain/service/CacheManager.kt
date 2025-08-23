@@ -123,6 +123,11 @@ class CacheManager(
             .register(meterRegistry)
     }
 
+    fun invalidateMetadata(objectKey: String) {
+        metadataCache.invalidate(objectKey)
+        logger.info("Invalidated metadata cache for objectKey={}", objectKey)
+    }
+
     suspend fun getProgramPath(userId: Long, objectKey: String): Path? =
         tracer.withSuspendingSpan("cache.get_program_path", ctx = Dispatchers.IO) {
             val timerSample = Timer.start(meterRegistry)

@@ -46,6 +46,7 @@ class ResultListener(
     private val playerUpdateService: PlayerUpdateService,
     private val jobFlowService: JobFlowService,
     private val jobQueryService: JobQueryService,
+    private val cacheEvictionPublisher: CacheEvictionPublisher,
     private val connectionFactory: ConnectionFactory,
     openTelemetry: OpenTelemetry,
     @Value("\${amqp.queue.results:oj.results.notify}") private val queueName: String,
@@ -188,6 +189,9 @@ class ResultListener(
                             compiledProgramRef = notification.compiledProgramRef!!,
                             compileTime = notification.timestamp,
                         )
+
+                        // Broadcast cache eviction by object key
+                        cacheEvictionPublisher.publishEvict(notification.compiledProgramRef!!)
                     }
 
                     // Fetch full data for compilation as it's less frequent and has fewer fields

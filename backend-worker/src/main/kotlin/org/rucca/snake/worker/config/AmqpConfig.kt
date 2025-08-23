@@ -53,6 +53,10 @@ class AmqpConfig {
     @Value("\${amqp.queue.results:oj.results.notify}") // 添加对结果队列名的注入
     private lateinit var resultsQueueName: String
 
+    // Cache eviction fanout exchange
+    @Value("\${amqp.exchange.cache:oj.cache.exchange}")
+    private lateinit var cacheExchangeName: String
+
     // --- Listener Configuration ---
     @Value("\${amqp.listener.prefetch:8}") private val prefetchCount: Int = 8
     @Value("\${amqp.listener.concurrency:8}") private val concurrency: Int = 8
@@ -170,6 +174,12 @@ class AmqpConfig {
         return BindingBuilder.bind(queue).to(exchange).with(resultRoutingKey)
     }
 
+    // Fanout exchange for cache eviction (worker declares exchange; queue created by listener)
+    @Bean
+    fun cacheFanoutExchange(): FanoutExchange {
+        return FanoutExchange(cacheExchangeName, true, false)
+    }
+
     /**
      * Creates a Jackson2JsonMessageConverter Bean. Uses the primary ObjectMapper configured in the
      * application (e.g., from JacksonConfig).
@@ -211,6 +221,19 @@ class AmqpConfig {
         return DefaultMessagePropertiesConverter()
         // If you need custom property conversion logic in the future,
         // you could create your own class implementing MessagePropertiesConverter here.
+    }
+
+    @Bean("autoAckRabbitListenerContainerFactory")
+    fun autoAckRabbitListenerContainerFactory(
+        connectionFactory: ConnectionFactory,
+        jsonMessageConverter: MessageConverter
+    ): RabbitListenerContainerFactory<SimpleMessageListenerContainer> {
+        val f = SimpleRabbitListenerContainerFactory()
+        f.setConnectionFactory(connectionFactory)
+        f.setMessageConverter(jsonMessageConverter)
+        f.setAcknowledgeMode(AcknowledgeMode.AUTO) // at-most-once for broadcast evictions
+        f.setPrefetchCount(16) // small prefetch is fine for tiny messages
+        return f
     }
 
     @Bean("rabbitListenerContainerFactory")

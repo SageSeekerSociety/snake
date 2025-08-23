@@ -45,6 +45,10 @@ class AmqpConfig {
     @Value("\${amqp.queue.results:oj.results.notify}") // 添加对结果队列名的注入
     private lateinit var resultsQueueName: String
 
+    // Cache eviction fanout exchange
+    @Value("\${amqp.exchange.cache:oj.cache.exchange}")
+    private lateinit var cacheExchangeName: String
+
     // --- 定义 Beans ---
 
     // 请求 Exchange (例如，使用 Direct 类型)
@@ -133,6 +137,12 @@ class AmqpConfig {
     fun resultsExchange(): DirectExchange {
         // Or FanoutExchange if multiple services need the notification
         return DirectExchange(resultsExchangeName, true, false)
+    }
+
+    // Fanout exchange for cache eviction (controller declares exchange only)
+    @Bean
+    fun cacheFanoutExchange(): FanoutExchange {
+        return FanoutExchange(cacheExchangeName, true, false)
     }
 
     // --- 定义结果队列和绑定 ---
