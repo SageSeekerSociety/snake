@@ -4,9 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.amqp.AmqpRejectAndDontRequeueException // Import this
 import org.springframework.amqp.core.*
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory
-import org.springframework.amqp.rabbit.connection.CachingConnectionFactory
 import org.springframework.amqp.rabbit.connection.ConnectionFactory
-import org.springframework.amqp.rabbit.core.RabbitAdmin
 import org.springframework.amqp.rabbit.core.RabbitTemplate
 import org.springframework.amqp.rabbit.listener.RabbitListenerContainerFactory
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer
@@ -208,7 +206,7 @@ class AmqpConfig {
     @Bean
     @Primary
     fun rabbitTemplate(
-        @Qualifier("publisherConnectionFactory") connectionFactory: ConnectionFactory,
+        connectionFactory: ConnectionFactory,
         messageConverter: MessageConverter,
     ): RabbitTemplate {
         val template = RabbitTemplate(connectionFactory)
@@ -227,7 +225,7 @@ class AmqpConfig {
 
     @Bean("autoAckRabbitListenerContainerFactory")
     fun autoAckRabbitListenerContainerFactory(
-        @Qualifier("consumerConnectionFactory") connectionFactory: ConnectionFactory,
+        connectionFactory: ConnectionFactory,
         jsonMessageConverter: MessageConverter,
     ): RabbitListenerContainerFactory<SimpleMessageListenerContainer> {
         val f = SimpleRabbitListenerContainerFactory()
@@ -238,56 +236,9 @@ class AmqpConfig {
         return f
     }
 
-    @Bean("consumerConnectionFactory")
-    fun consumerConnectionFactory(
-        @Value("\${spring.rabbitmq.host:localhost}") host: String,
-        @Value("\${spring.rabbitmq.port:5672}") port: Int,
-        @Value("\${spring.rabbitmq.username:guest}") username: String,
-        @Value("\${spring.rabbitmq.password:guest}") password: String,
-        @Value("\${spring.rabbitmq.virtual-host:/}") virtualHost: String,
-        @Value("\${amqp.connection:3}") connectionPoolSize: Int = 3,
-        @Value("\${amqp.max-connection:3}") connectionPoolMaxSize: Int = 3,
-    ): CachingConnectionFactory {
-        val cf = CachingConnectionFactory(host, port)
-        cf.username = username
-        cf.setPassword(password)
-        cf.virtualHost = virtualHost
-
-        cf.cacheMode = CachingConnectionFactory.CacheMode.CONNECTION
-        cf.connectionCacheSize = connectionPoolSize
-        cf.setConnectionLimit(connectionPoolMaxSize)
-        cf.channelCacheSize = 100
-
-        cf.setConnectionNameStrategy {
-            "worker-consumer-${java.net.InetAddress.getLocalHost().hostName}"
-        }
-
-        cf.setRequestedHeartBeat(30)
-
-        return cf
-    }
-
-    @Bean("publisherConnectionFactory")
-    fun publisherConnectionFactory(
-        @Value("\${spring.rabbitmq.host:localhost}") host: String,
-        @Value("\${spring.rabbitmq.port:5672}") port: Int,
-        @Value("\${spring.rabbitmq.username:guest}") username: String,
-        @Value("\${spring.rabbitmq.password:guest}") password: String,
-        @Value("\${spring.rabbitmq.virtual-host:/}") virtualHost: String,
-    ): CachingConnectionFactory {
-        val cf = CachingConnectionFactory(host, port)
-        cf.username = username
-        cf.setPassword(password)
-        cf.virtualHost = virtualHost
-
-        cf.cacheMode = CachingConnectionFactory.CacheMode.CHANNEL
-
-        return cf
-    }
-
     @Bean("rabbitListenerContainerFactory")
     fun rabbitListenerContainerFactory(
-        @Qualifier("consumerConnectionFactory") connectionFactory: ConnectionFactory,
+        connectionFactory: ConnectionFactory,
         jsonMessageConverter: MessageConverter, // Reuse the existing JSON converter
     ): RabbitListenerContainerFactory<SimpleMessageListenerContainer> {
         val factory = SimpleRabbitListenerContainerFactory()
@@ -331,29 +282,5 @@ class AmqpConfig {
         factory.setDefaultRequeueRejected(false)
 
         return factory
-    }
-
-    @Bean
-    fun rabbitAdmin(@Qualifier("consumerConnectionFactory") cf: ConnectionFactory): AmqpAdmin =
-        RabbitAdmin(cf)
-
-    @Bean
-    fun cacheEvictDeclarables(
-        @Value("\${spring.application.name:snake.worker}") appName: String,
-        @Value("\${HOSTNAME:local}") host: String,
-        @Qualifier("cacheFanoutExchange") cacheFx: FanoutExchange,
-    ): Declarables {
-        val queueName = "$appName.cache-evict.$host"
-
-        val queue =
-            QueueBuilder.durable(queueName)
-                .withArgument("x-queue-type", "quorum")
-                .withArgument("x-max-length", 1000)
-                .withArgument("x-overflow", "drop-head")
-                .withArgument("x-message-ttl", 60000)
-                .build()
-
-        val binding = BindingBuilder.bind(queue).to(cacheFx)
-        return Declarables(queue, binding)
     }
 }
