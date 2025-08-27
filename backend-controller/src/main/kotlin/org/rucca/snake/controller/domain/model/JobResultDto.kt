@@ -44,7 +44,6 @@ data class ExecutionJobResultDto(
     val cpuTimeSeconds: Double?, // Specific to execution
     val memoryKb: Long?, // Specific to execution
     val exitCode: Int?, // Specific to execution
-    val sandboxLogRef: String?, // Specific to execution (optional)
     val clientRequestId: String?,
     val sessionId: String?,
     val tickNumber: Int?,

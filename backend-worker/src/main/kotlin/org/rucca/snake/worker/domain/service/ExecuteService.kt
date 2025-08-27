@@ -12,7 +12,6 @@ import io.opentelemetry.context.Context
 import io.opentelemetry.extension.kotlin.asContextElement
 import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
-import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
@@ -25,7 +24,6 @@ import java.util.*
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import java.util.regex.Pattern
-import kotlin.random.Random
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
@@ -34,11 +32,11 @@ import org.rucca.snake.common.domain.model.ExecutionRequest
 import org.rucca.snake.common.domain.model.ExecutionResultNotification
 import org.rucca.snake.common.domain.model.JobStatus
 import org.rucca.snake.common.utils.recordSuspendable
+import org.rucca.snake.common.utils.withLoggingContext
 import org.rucca.snake.common.utils.withSpan
 import org.rucca.snake.common.utils.withSuspendingSpan
 import org.rucca.snake.worker.config.ApplicationConfig
 import org.rucca.snake.worker.infra.amqp.ResultNotifier
-import org.rucca.snake.worker.infra.storage.MinioService
 import org.rucca.snake.worker.utils.deleteDirectoryRecursively
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Qualifier
@@ -53,7 +51,6 @@ class ExecuteService(
     private val cacheManager: CacheManager,
     private val resultNotifier: ResultNotifier,
     private val applicationConfig: ApplicationConfig,
-    private val minioService: MinioService,
     private val redisTemplate: StringRedisTemplate,
     private val meterRegistry: MeterRegistry,
     private val objectMapper: ObjectMapper,
@@ -162,7 +159,6 @@ class ExecuteService(
                 cpu_time_seconds = (?::double precision),
                 memory_kb = (?::bigint),
                 exit_code = (?::integer),
-                sandbox_log_ref = ?,
                 error_details = ?,
                 worker_node_id = ?
             WHERE job_id = (?::uuid) AND status = 'PENDING'
@@ -179,7 +175,6 @@ class ExecuteService(
                         r.cpuTimeSeconds,
                         r.memoryKb,
                         r.exitCode,
-                        r.sandboxLogRef,
                         r.errorDetails,
                         r.workerNodeId,
                         UUID.fromString(r.jobId),
@@ -341,13 +336,10 @@ class ExecuteService(
                 var cpuTimeSeconds: Double? = null
                 var memoryKb: Long? = null
                 var exitCode: Int? = null
-                var sandboxLogContent: String? =
-                    null // Store log content if needed for debugging or result
                 var errorDetails: String? = null
                 var programStderr: String? = null
                 // Set when we decide to upload logs (failure or sampled success)
-                val logFileKey = "logs/$aiOwnerUserId/$jobId/nsjail.log"
-                var finalLogRef: String? = null
+                "logs/$aiOwnerUserId/$jobId/nsjail.log"
                 val startTime = Instant.now()
                 var resultNotification: ExecutionResultNotification? = null
 
@@ -397,7 +389,6 @@ class ExecuteService(
                                 newMemoryData = null,
                                 errorDetails =
                                     "Failed to read previous memory from Redis for job $jobId: ${e.message}",
-                                sandboxLogRef = null,
                                 clientRequestId = request.clientRequestId,
                                 workerNodeId = applicationConfig.nodeId,
                                 submitTime = request.timestamp,
@@ -538,12 +529,17 @@ class ExecuteService(
                         if (!p2done.isNegative && !p2done.isZero) publishToDoneTimer.record(p2done)
                     }
 
+                    withLoggingContext(mapOf("job_id" to jobId, "event" to "sandbox_log")) {
+                        logger.info(
+                            "Nsjail log for job {}: {}",
+                            jobId,
+                            nsjailResult.logContent.take(4096),
+                        )
+                    }
+
                     // Process Nsjail Result
                     exitCode = nsjailResult.exitCode
                     programStderr = nsjailResult.programStderr
-                    // programOutput is now split into action and newMemoryData
-                    // programOutput = nsjailResult.output // Old way
-                    sandboxLogContent = nsjailResult.logContent // Store for potential use/debugging
 
                     var rawMemoryFromAI: String? = null
                     if (nsjailResult.output.isNotBlank()) {
@@ -613,13 +609,6 @@ class ExecuteService(
                             memoryDataForRedis = null
                         }
                     }
-
-                    // Output the sandbox log for debugging
-                    logger.debug(
-                        "Nsjail log for job {}: {}",
-                        jobId,
-                        nsjailResult.logContent, // Limit log size for debug output
-                    )
 
                     // Parse stats from log
                     val stats = parseCgroupStatsFromLog(nsjailResult.logContent)
@@ -696,11 +685,6 @@ class ExecuteService(
                             memoryKb ?: "N/A",
                             errorDetails.take(200),
                         )
-                        // Failure: schedule async log upload and set ref
-                        if (Files.exists(logFile)) {
-                            finalLogRef = logFileKey
-                            scheduleAsyncLogUpload(logFileKey, logFile)
-                        }
                     } else {
                         logger.info(
                             "Execution job {} finished with status: {}. ExitCode: {}, CPU: {}s, Mem: {}KB.",
@@ -710,11 +694,6 @@ class ExecuteService(
                             cpuTimeSeconds ?: "N/A",
                             memoryKb ?: "N/A",
                         )
-                        // Optional sampling for successful logs
-                        if (shouldSampleSuccessLog() && Files.exists(logFile)) {
-                            finalLogRef = logFileKey
-                            scheduleAsyncLogUpload(logFileKey, logFile)
-                        }
                     }
                 } catch (e: TimeoutCancellationException) {
                     // This would typically be caught if the semaphore wait times out,
@@ -726,11 +705,6 @@ class ExecuteService(
                     currentStatus = JobStatus.ERROR // Or maybe a specific timeout status
                     errorDetails = "Worker operation timed out: ${e.message}"
                     Span.current().setAttribute("job.timeout", true)
-                    // On failure, schedule async log upload
-                    if (Files.exists(logFile)) {
-                        finalLogRef = logFileKey
-                        scheduleAsyncLogUpload(logFileKey, logFile)
-                    }
 
                     throw e
                 } catch (e: Exception) {
@@ -743,11 +717,6 @@ class ExecuteService(
                     currentStatus = JobStatus.ERROR // Worker internal error
                     errorDetails = "Internal worker error during execution: ${e.message}"
                     Span.current().setAttribute("job.internal_error", true)
-                    // On failure, schedule async log upload
-                    if (Files.exists(logFile)) {
-                        finalLogRef = logFileKey
-                        scheduleAsyncLogUpload(logFileKey, logFile)
-                    }
 
                     throw e
                 } finally {
@@ -769,7 +738,6 @@ class ExecuteService(
                                 if (currentStatus == JobStatus.SUCCESS) memoryDataForRedis
                                 else null,
                             errorDetails = errorDetails.takeUnless { it.isNullOrBlank() },
-                            sandboxLogRef = finalLogRef,
                             clientRequestId = request.clientRequestId,
                             workerNodeId = applicationConfig.nodeId,
                             submitTime = request.timestamp,
@@ -795,28 +763,28 @@ class ExecuteService(
                                     runCatching {
                                         put(
                                             "execute.delta_pub_to_delivered_ms",
-                                            java.time.Duration.between(pubTs, delTs).toMillis(),
+                                            Duration.between(pubTs, delTs).toMillis(),
                                         )
                                     }
                                     runCatching {
                                         if (stTs != null)
                                             put(
                                                 "execute.delta_delivered_to_start_ms",
-                                                java.time.Duration.between(delTs, stTs).toMillis(),
+                                                Duration.between(delTs, stTs).toMillis(),
                                             )
                                     }
                                     runCatching {
                                         if (stTs != null && dnTs != null)
                                             put(
                                                 "execute.delta_start_to_done_ms",
-                                                java.time.Duration.between(stTs, dnTs).toMillis(),
+                                                Duration.between(stTs, dnTs).toMillis(),
                                             )
                                     }
                                     runCatching {
                                         if (dnTs != null)
                                             put(
                                                 "execute.delta_pub_to_done_ms",
-                                                java.time.Duration.between(pubTs, dnTs).toMillis(),
+                                                Duration.between(pubTs, dnTs).toMillis(),
                                             )
                                     }
                                 }
@@ -866,41 +834,6 @@ class ExecuteService(
                         }
                     }
                 }
-            }
-        }
-    }
-
-    private fun shouldSampleSuccessLog(): Boolean {
-        if (successLogSampleRate <= 0.0) return false
-        if (successLogSampleRate >= 1.0) return true
-        return Random.nextDouble() < successLogSampleRate
-    }
-
-    private fun scheduleAsyncLogUpload(objectKey: String, logFile: Path) {
-        val data =
-            Files.newInputStream(logFile).use { inputStream ->
-                readStreamToByteArray(inputStream, 16 * 1024)
-            }
-        val fileSize = data.size.toLong()
-        appScope.launch(Dispatchers.IO + Context.current().asContextElement()) {
-            try {
-                tracer.withSuspendingSpan("minio.upload_log.async") {
-                    Span.current().apply {
-                        setAttribute("object.key", objectKey)
-                        setAttribute("object.size_bytes", fileSize)
-                    }
-                    ByteArrayInputStream(data).use { inputStream ->
-                        minioService.uploadStream(
-                            objectKey = objectKey,
-                            inputStream = inputStream,
-                            size = fileSize,
-                            contentType = "text/plain",
-                        )
-                    }
-                }
-                logger.info("Async uploaded nsjail log to MinIO: {}", objectKey)
-            } catch (e: Exception) {
-                logger.error("Async log upload failed for {}: {}", objectKey, e.message)
             }
         }
     }
