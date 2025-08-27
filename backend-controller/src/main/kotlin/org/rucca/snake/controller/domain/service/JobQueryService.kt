@@ -73,7 +73,6 @@ class JobQueryService(
                         cpuTimeSeconds = executionJob.cpuTimeSeconds,
                         memoryKb = executionJob.memoryKb,
                         exitCode = executionJob.exitCode,
-                        sandboxLogRef = executionJob.sandboxLogRef,
                         clientRequestId = executionJob.clientRequestId,
                         sessionId = executionJob.sessionId?.toString(),
                         tickNumber = executionJob.tickNumber,

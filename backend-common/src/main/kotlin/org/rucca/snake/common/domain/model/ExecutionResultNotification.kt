@@ -15,7 +15,6 @@ data class ExecutionResultNotification(
     val programStderr: String?,
     val newMemoryData: String?,
     val errorDetails: String?,
-    val sandboxLogRef: String?,
     val clientRequestId: String?,
     val workerNodeId: String?,
     val submitTime: Instant,

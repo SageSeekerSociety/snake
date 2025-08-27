@@ -242,7 +242,6 @@ class ResultListener(
                             "cpuTimeSeconds" to notification.cpuTimeSeconds,
                             "memoryKb" to notification.memoryKb,
                             "exitCode" to notification.exitCode,
-                            "sandboxLogRef" to notification.sandboxLogRef,
                             "clientRequestId" to notification.clientRequestId,
                             "action" to notification.action,
                             "tickNumber" to notification.tickNumber,
