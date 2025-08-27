@@ -16,7 +16,24 @@ class CacheEvictionListener(private val cacheManager: CacheManager) {
 
     @RabbitListener(
         containerFactory = "autoAckRabbitListenerContainerFactory",
-        queues = ["\${spring.application.name:snake.worker}.cache-evict.\${HOSTNAME:local}"]
+        bindings =
+            [
+                QueueBinding(
+                    value =
+                        Queue(
+                            value = "",
+                            durable = "false",
+                            exclusive = "true",
+                            autoDelete = "true",
+                        ),
+                    exchange =
+                        Exchange(
+                            name = "\${amqp.exchange.cache:oj.cache.exchange}",
+                            type = "fanout",
+                        ),
+                    key = [""],
+                )
+            ],
     )
     fun onCacheEvict(message: CacheEvictMessage) {
         try {
