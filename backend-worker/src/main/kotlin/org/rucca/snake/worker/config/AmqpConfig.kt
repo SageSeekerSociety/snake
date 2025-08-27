@@ -6,7 +6,6 @@ import org.springframework.amqp.core.*
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory
 import org.springframework.amqp.rabbit.connection.ConnectionFactory
-import org.springframework.amqp.rabbit.core.RabbitAdmin
 import org.springframework.amqp.rabbit.core.RabbitTemplate
 import org.springframework.amqp.rabbit.listener.RabbitListenerContainerFactory
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer
@@ -331,28 +330,5 @@ class AmqpConfig {
         factory.setDefaultRequeueRejected(false)
 
         return factory
-    }
-
-    @Bean
-    fun rabbitAdmin(@Qualifier("consumerConnectionFactory") cf: ConnectionFactory): AmqpAdmin =
-        RabbitAdmin(cf)
-
-    @Bean
-    fun cacheEvictDeclarables(
-        @Value("\${spring.application.name:snake.worker}") appName: String,
-        @Value("\${HOSTNAME:local}") host: String,
-        @Qualifier("cacheFanoutExchange") cacheFx: FanoutExchange,
-    ): Declarables {
-        val queueName = "$appName.cache-evict.$host"
-
-        val queue = QueueBuilder.durable(queueName)
-            .withArgument("x-queue-type", "quorum")
-            .withArgument("x-max-length", 1000)
-            .withArgument("x-overflow", "drop-head")
-            .withArgument("x-message-ttl", 60000)
-            .build()
-
-        val binding = BindingBuilder.bind(queue).to(cacheFx)
-        return Declarables(queue, binding)
     }
 }
