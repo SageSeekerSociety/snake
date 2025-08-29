@@ -1,5 +1,6 @@
 package org.rucca.snake.controller.infra.throttle
 
+import jakarta.validation.Valid
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.Positive
 import java.time.temporal.ChronoUnit
@@ -11,7 +12,7 @@ import org.springframework.validation.annotation.Validated
 @Component
 @Validated
 @ConfigurationProperties(prefix = "rate-limiter")
-data class RateLimiterProperties(var policies: Map<String, Policy> = emptyMap())
+data class RateLimiterProperties(@field:Valid var policies: Map<String, Policy> = emptyMap())
 
 data class Policy(
     @Positive var capacity: Long,
