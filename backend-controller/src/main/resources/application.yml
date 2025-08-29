@@ -63,7 +63,6 @@ cheese-auth:
   auth-server-url: ${CHEESE_AUTH_SERVER_URL:http://localhost:8080}
 
 application:
-  worker-urls: http://localhost:8081
   cors:
     allowed-origins:
       - http://localhost:3000
@@ -95,3 +94,34 @@ minio:
   accessKey: ${MINIO_ACCESS_KEY:minioadmin}
   secretKey: ${MINIO_SECRET_KEY:minioadmin}
   bucketName: ${MINIO_BUCKET_NAME:oj-programs}
+
+# ===============================================
+# Rate Limiter Configuration
+# ===============================================
+rate-limiter:
+  # 定义所有可用的限流策略
+  policies:
+
+    compilation:
+      capacity: 10                    # 桶容量/突发容量: 10
+      refill-rate: 10                 # 补充速率: 10
+      refill-period: 1                # 补充周期: 1
+      refill-unit: MINUTES            # 补充单位: 分钟
+      key-expression: "'compilation:' + #userId" # Redis Key表达式
+      tokens-expression: "1"        # 每次请求固定消耗1个令牌
+
+    execution-jobs:
+      capacity: 800                   # 桶容量/突发容量: 800 jobs
+      refill-rate: 400                # 补充速率: 400 jobs
+      refill-period: 1                # 补充周期: 1
+      refill-unit: SECONDS            # 补充单位: 秒
+      key-expression: "'execution_jobs:' + #userId" # Redis Key表达式
+      tokens-expression: "#requests.size()" # 消耗的令牌数 = 请求体中requests列表的大小
+
+    execution-frequency:
+      capacity: 100                   # 桶容量/突发容量: 100 requests
+      refill-rate: 50                 # 补充速率: 50 requests
+      refill-period: 1                # 补充周期: 1
+      refill-unit: SECONDS            # 补充单位: 秒
+      key-expression: "'execution_freq:' + #userId" # Redis Key表达式
+      tokens-expression: "1"        # 每次请求固定消耗1个令牌

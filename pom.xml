@@ -31,9 +31,9 @@
     <properties>
         <!-- 统一管理版本号 -->
         <java.version>21</java.version>
-        <spring.boot.version>3.4.4</spring.boot.version>
+        <spring.boot.version>3.5.5</spring.boot.version>
         <!-- 确保统一 -->
-        <kotlin.version>2.1.10</kotlin.version>
+        <kotlin.version>2.1.20</kotlin.version>
         <!-- 确保统一 -->
         <kotlinx-coroutines.version>1.10.1</kotlinx-coroutines.version>
         <minio.version>8.5.17</minio.version>
@@ -54,6 +54,7 @@
         <jakarta-validation-api.version>3.1.1</jakarta-validation-api.version>
         <jakarta-servlet-api.version>6.1.0</jakarta-servlet-api.version>
         <opentelemetry-instrumentation.version>2.19.0</opentelemetry-instrumentation.version>
+        <bucket4j.version>8.15.0</bucket4j.version>
     </properties>
 
     <!-- 统一依赖管理 (子模块按需引用，无需指定版本) -->
@@ -73,6 +74,22 @@
                 <version>${opentelemetry-instrumentation.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>com.bucket4j</groupId>
+                <artifactId>bucket4j_jdk17-core</artifactId>
+                <version>${bucket4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.bucket4j</groupId>
+                <artifactId>bucket4j_jdk17-redis-common</artifactId>
+                <version>${bucket4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.bucket4j</groupId>
+                <artifactId>bucket4j_jdk17-lettuce</artifactId>
+                <version>${bucket4j.version}</version>
             </dependency>
 
             <!-- 数据库相关 -->

@@ -3,7 +3,6 @@ package org.rucca.snake.worker.infra.amqp
 import org.rucca.snake.common.domain.model.CacheEvictMessage
 import org.rucca.snake.worker.domain.service.CacheManager
 import org.slf4j.LoggerFactory
-import org.springframework.amqp.rabbit.annotation.Argument
 import org.springframework.amqp.rabbit.annotation.Exchange
 import org.springframework.amqp.rabbit.annotation.Queue
 import org.springframework.amqp.rabbit.annotation.QueueBinding
