@@ -15,6 +15,7 @@ import org.rucca.snake.controller.domain.model.ApiResponse
 import org.rucca.snake.controller.domain.service.JobFlowService
 import org.rucca.snake.controller.domain.service.JobQueryService
 import org.rucca.snake.controller.domain.service.JobSubmitService
+import org.rucca.snake.controller.infra.throttle.RateLimited
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
@@ -43,6 +44,7 @@ class CompileController(
 
     @Guard("submit", "program")
     @PostMapping(consumes = [MediaType.MULTIPART_FORM_DATA_VALUE])
+    @RateLimited("compilation")
     suspend fun submitCompileRequest(
         @RequestPart("sourceFile") sourceFile: MultipartFile
     ): ResponseEntity<ApiResponse> {

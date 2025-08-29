@@ -28,15 +28,10 @@ services:
       backend-controller:
         condition: service_healthy
     volumes:
-      - type: tmpfs
-        target: /app/data
-        tmpfs:
-          size: 1G
-      - type: tmpfs
-        target: /app/cache
-        tmpfs:
-          size: 2G
       - ./application-worker.yml:/app/config/application.yml:ro
+    tmpfs:
+      - /app/data:exec,size=1G
+      - /app/cache:exec,size=2G
     logging:
       driver: json-file
       options:

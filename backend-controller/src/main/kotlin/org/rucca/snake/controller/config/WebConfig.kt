@@ -13,6 +13,7 @@ class WebConfig(private val applicationConfig: ApplicationConfig) : WebMvcConfig
             .allowedOrigins(*applicationConfig.cors.allowedOrigins.toTypedArray())
             .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
             .allowedHeaders("*")
+            .exposedHeaders("Retry-After", "RateLimit", "RateLimit-Policy")
             .maxAge(3600)
     }
 }

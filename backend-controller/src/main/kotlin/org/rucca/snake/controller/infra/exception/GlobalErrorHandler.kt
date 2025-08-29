@@ -11,7 +11,9 @@ package org.rucca.snake.controller.infra.exception
 
 import org.rucca.cheese.auth.error.BaseError
 import org.rucca.snake.controller.domain.model.ApiError
+import org.rucca.snake.controller.domain.model.ApiResponse
 import org.rucca.snake.controller.domain.model.ErrorResponse
+import org.rucca.snake.controller.infra.throttle.RateLimitExceededException
 import org.slf4j.LoggerFactory
 import org.springframework.amqp.AmqpException
 import org.springframework.dao.DataAccessException
@@ -35,6 +37,21 @@ class GlobalExceptionHandler {
     private val logger = LoggerFactory.getLogger(GlobalExceptionHandler::class.java)
 
     // --- 4xx Client Errors ---
+
+    @ExceptionHandler(RateLimitExceededException::class)
+    fun handleRateLimitExceeded(ex: RateLimitExceededException): ResponseEntity<ApiResponse> {
+        val nanos = ex.nanosToWaitForRefill
+        val retryAfterSeconds =
+            (((nanos + 999_999_999) / 1_000_000_000).coerceAtLeast(1)).toString()
+
+        val apiError = ApiError(type = "RATE_LIMIT_EXCEEDED", details = ex.message)
+        val apiResponse =
+            ApiResponse.Error(code = 429, message = "Too Many Requests", error = apiError)
+
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+            .header("Retry-After", retryAfterSeconds)
+            .body(apiResponse)
+    }
 
     // Handle @Valid validation failures on request bodies/params
     @ExceptionHandler(MethodArgumentNotValidException::class)

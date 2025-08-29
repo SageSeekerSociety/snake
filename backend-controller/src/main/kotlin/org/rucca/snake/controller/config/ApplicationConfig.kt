@@ -16,7 +16,4 @@ data class CorsProperties(var allowedOrigins: List<String> = listOf("*"))
 
 @Component
 @ConfigurationProperties(prefix = "application")
-data class ApplicationConfig(
-    var workerUrls: List<String> = listOf("http://localhost:8080"),
-    var cors: CorsProperties = CorsProperties(),
-)
+data class ApplicationConfig(var cors: CorsProperties = CorsProperties())
