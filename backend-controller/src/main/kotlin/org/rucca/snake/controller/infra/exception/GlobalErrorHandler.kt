@@ -9,8 +9,6 @@
 
 package org.rucca.snake.controller.infra.exception
 
-import jakarta.servlet.http.HttpServletResponse
-import java.util.concurrent.TimeUnit
 import org.rucca.cheese.auth.error.BaseError
 import org.rucca.snake.controller.domain.model.ApiError
 import org.rucca.snake.controller.domain.model.ApiResponse
@@ -41,20 +39,18 @@ class GlobalExceptionHandler {
     // --- 4xx Client Errors ---
 
     @ExceptionHandler(RateLimitExceededException::class)
-    fun handleRateLimitExceeded(
-        ex: RateLimitExceededException,
-        response: HttpServletResponse,
-    ): ResponseEntity<ApiResponse> {
+    fun handleRateLimitExceeded(ex: RateLimitExceededException): ResponseEntity<ApiResponse> {
+        val nanos = ex.nanosToWaitForRefill
         val retryAfterSeconds =
-            TimeUnit.NANOSECONDS.toSeconds(ex.nanosToWaitForRefill).coerceAtLeast(1)
-
-        response.setHeader("Retry-After", retryAfterSeconds.toString())
+            (((nanos + 999_999_999) / 1_000_000_000).coerceAtLeast(1)).toString()
 
         val apiError = ApiError(type = "RATE_LIMIT_EXCEEDED", details = ex.message)
         val apiResponse =
             ApiResponse.Error(code = 429, message = "Too Many Requests", error = apiError)
 
-        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(apiResponse)
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+            .header("Retry-After", retryAfterSeconds)
+            .body(apiResponse)
     }
 
     // Handle @Valid validation failures on request bodies/params

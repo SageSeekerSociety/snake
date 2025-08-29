@@ -1,19 +1,23 @@
 package org.rucca.snake.controller.infra.throttle
 
+import jakarta.validation.constraints.NotBlank
+import jakarta.validation.constraints.Positive
 import java.time.temporal.ChronoUnit
 import org.intellij.lang.annotations.Language
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.stereotype.Component
+import org.springframework.validation.annotation.Validated
 
 @Component
+@Validated
 @ConfigurationProperties(prefix = "rate-limiter")
 data class RateLimiterProperties(var policies: Map<String, Policy> = emptyMap())
 
 data class Policy(
-    var capacity: Long,
-    var refillRate: Long,
-    var refillPeriod: Long = 1,
+    @Positive var capacity: Long,
+    @Positive var refillRate: Long,
+    @Positive var refillPeriod: Long = 1,
     var refillUnit: ChronoUnit = ChronoUnit.MINUTES,
-    @Language("SpEL") var keyExpression: String,
-    @Language("SpEL") var tokensExpression: String = "1",
+    @NotBlank @Language("SpEL") var keyExpression: String,
+    @NotBlank @Language("SpEL") var tokensExpression: String = "1",
 )

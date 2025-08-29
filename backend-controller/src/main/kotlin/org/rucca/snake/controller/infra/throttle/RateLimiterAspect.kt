@@ -3,9 +3,10 @@ package org.rucca.snake.controller.infra.throttle
 import io.github.bucket4j.BucketConfiguration
 import io.github.bucket4j.ConsumptionProbe
 import io.github.bucket4j.distributed.proxy.ProxyManager
+import jakarta.servlet.http.HttpServletResponse
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
+import kotlin.math.max
 import org.aspectj.lang.ProceedingJoinPoint
 import org.aspectj.lang.annotation.Around
 import org.aspectj.lang.annotation.Aspect
@@ -13,6 +14,7 @@ import org.aspectj.lang.reflect.MethodSignature
 import org.rucca.cheese.auth.AuthenticationService
 import org.slf4j.LoggerFactory
 import org.springframework.expression.Expression
+import org.springframework.expression.ParseException
 import org.springframework.expression.spel.standard.SpelExpressionParser
 import org.springframework.expression.spel.support.StandardEvaluationContext
 import org.springframework.stereotype.Component
@@ -49,6 +51,7 @@ class RateLimiterAspect(
 
         var mostRelevantProbe: ConsumptionProbe? = null
         var mostRelevantPolicy: Policy? = null
+        var mostRelevantPolicyName: String? = null
 
         for (policyName in policyNames) {
             val policy =
@@ -61,6 +64,12 @@ class RateLimiterAspect(
             val tokensToConsume = parseSpel(policy.tokensExpression, context, Long::class.java)
 
             if (key == null || tokensToConsume == null || tokensToConsume == 0L) {
+                logger.warn(
+                    "Skipping rate limit policy '{}': key={}, tokensToConsume={}",
+                    policyName,
+                    key,
+                    tokensToConsume,
+                )
                 continue
             }
 
@@ -84,31 +93,64 @@ class RateLimiterAspect(
                     mostRelevantProbe == null ||
                         (probe.remainingTokens * 100 / policy.capacity) <
                             (mostRelevantProbe.remainingTokens * 100 /
-                                mostRelevantPolicy!!.capacity)
+                                (mostRelevantPolicy?.capacity ?: policy.capacity))
                 ) {
                     mostRelevantProbe = probe
                     mostRelevantPolicy = policy
+                    mostRelevantPolicyName = policyName
                 }
             } else {
-                setRateLimitHeaders(probe, policy)
+                setRateLimitHeaders(probe, policy, policyName)
                 throw RateLimitExceededException("Rate limit exceeded.", probe.nanosToWaitForRefill)
             }
         }
 
-        setRateLimitHeaders(mostRelevantProbe, mostRelevantPolicy)
+        setRateLimitHeaders(mostRelevantProbe, mostRelevantPolicy, mostRelevantPolicyName)
         return joinPoint.proceed()
     }
 
-    private fun setRateLimitHeaders(probe: ConsumptionProbe?, policy: Policy?) {
-        if (probe == null || policy == null) return
+    private fun appendHeader(response: HttpServletResponse, name: String, value: String) {
+        val existing = response.getHeader(name)
+        if (existing.isNullOrBlank()) {
+            response.setHeader(name, value)
+        } else {
+            response.setHeader(name, "$existing, $value")
+        }
+    }
+
+    private fun setRateLimitHeaders(
+        probe: ConsumptionProbe?,
+        policy: Policy?,
+        policyName: String?,
+    ) {
         val response =
             (RequestContextHolder.getRequestAttributes() as? ServletRequestAttributes)?.response
                 ?: return
 
-        response.setHeader("RateLimit-Limit", policy.capacity.toString())
-        response.setHeader("RateLimit-Remaining", probe.remainingTokens.toString())
-        val resetSeconds = TimeUnit.NANOSECONDS.toSeconds(probe.nanosToWaitForRefill)
-        response.setHeader("RateLimit-Reset", resetSeconds.toString())
+        val name = policyName?.takeIf { it.isNotBlank() } ?: "default"
+
+        policy?.let { p ->
+            val perUnitSeconds = p.refillUnit.duration.seconds
+            val windowSeconds = max(1L, perUnitSeconds * p.refillPeriod)
+
+            val policyItem = """"$name";q=${p.refillRate};w=$windowSeconds"""
+            appendHeader(response, "RateLimit-Policy", policyItem)
+        }
+
+        probe?.let { pr ->
+            val remaining = pr.remainingTokens.coerceAtLeast(0)
+            val nanos = pr.nanosToWaitForRefill
+            val tSeconds: Long? =
+                if (nanos > 0) {
+                    (nanos + 999_999_999L) / 1_000_000_000L
+                } else null
+
+            val rateLimitItem = buildString {
+                append("\"").append(name).append("\";r=").append(remaining)
+                tSeconds?.let { append(";t=").append(it) }
+            }
+            appendHeader(response, "RateLimit", rateLimitItem)
+        }
     }
 
     private fun createEvaluationContext(joinPoint: ProceedingJoinPoint): StandardEvaluationContext {
@@ -137,7 +179,16 @@ class RateLimiterAspect(
                 }
             expression.getValue(context, desiredResultType)
         } catch (e: Exception) {
-            logger.error("Failed to parse SpEL expression: '${expressionString}'", e)
+            logger.error(
+                "Failed to evaluate SpEL expression '${expressionString}': ${e.message}",
+                e,
+            )
+            if (e is ParseException) {
+                throw IllegalStateException(
+                    "Invalid SpEL expression in configuration: $expressionString",
+                    e,
+                )
+            }
             null
         }
     }

@@ -5,7 +5,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.4.4</version>
+        <version>3.5.5</version>
         <!-- 保持和子模块一致 -->
         <relativePath/>
         <!-- lookup parent from repository -->
@@ -31,7 +31,6 @@
     <properties>
         <!-- 统一管理版本号 -->
         <java.version>21</java.version>
-        <spring.boot.version>3.5.5</spring.boot.version>
         <!-- 确保统一 -->
         <kotlin.version>2.1.20</kotlin.version>
         <!-- 确保统一 -->
