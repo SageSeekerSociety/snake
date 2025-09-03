@@ -136,3 +136,5 @@ submission-policy:
   # 允许提交执行请求的用户ID白名单（按提交者校验；被执行的程序所有者不受限制）
   # 为空表示不启用白名单限制
   execute-submit-whitelist: []
+  # 单次批量执行请求的最大 items 数（超过则返回 400）
+  execute-batch-max-size: 30

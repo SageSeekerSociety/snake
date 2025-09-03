@@ -74,6 +74,23 @@ class ExecuteController(
                 )
         }
 
+        // Enforce batch size limit (per-request)
+        val maxBatch = submissionPolicy.executeBatchMaxSize
+        if (requests.size > maxBatch) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(
+                    ApiResponse.Error(
+                        code = 400,
+                        message = "Batch size exceeds limit ($maxBatch).",
+                        error =
+                            ApiError(
+                                type = "VALIDATION_ERROR",
+                                details = "requests.size=${requests.size} > $maxBatch",
+                            ),
+                    )
+                )
+        }
+
         try {
             val currentUserId = getCurrentUserId() // Get current user ID
 

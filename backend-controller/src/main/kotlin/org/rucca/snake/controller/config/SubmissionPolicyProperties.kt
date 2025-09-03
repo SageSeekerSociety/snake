@@ -9,4 +9,5 @@ import org.springframework.stereotype.Component
 data class SubmissionPolicyProperties(
     var systemCloseAt: OffsetDateTime? = null,
     var executeSubmitWhitelist: Set<Long> = emptySet(),
+    var executeBatchMaxSize: Int = 30,
 )
