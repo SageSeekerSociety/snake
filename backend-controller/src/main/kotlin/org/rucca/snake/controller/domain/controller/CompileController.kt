@@ -51,25 +51,31 @@ class CompileController(
     suspend fun submitCompileRequest(
         @RequestPart("sourceFile") sourceFile: MultipartFile
     ): ResponseEntity<ApiResponse> {
-        // Check system close time
-        submissionPolicy.systemCloseAt?.let { closeAt ->
-            if (Instant.now().isAfter(closeAt) || Instant.now() == closeAt) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(
-                        ApiResponse.Error(
-                            code = 403,
-                            message = "System is closed for submissions.",
-                            error =
-                                ApiError(
-                                    type = "SYSTEM_CLOSED",
-                                    details = "Submissions are disabled after close time.",
-                                ),
+        val userId = authenticationService.getCurrentUserId()
+
+        // After close time: only whitelist can submit; before close: no whitelist restriction
+        submissionPolicy.systemCloseAt?.toInstant()?.let { closeAt ->
+            val now = Instant.now()
+            val afterClose = !now.isBefore(closeAt)
+            if (afterClose) {
+                val whitelist = submissionPolicy.executeSubmitWhitelist
+                if (whitelist.isEmpty() || !whitelist.contains(userId)) {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(
+                            ApiResponse.Error(
+                                code = 403,
+                                message = "System is closed; only whitelisted users may submit.",
+                                error =
+                                    ApiError(
+                                        type = "SYSTEM_CLOSED",
+                                        details =
+                                            "Submitter is not in whitelist after close time.",
+                                    ),
+                            )
                         )
-                    )
+                }
             }
         }
-
-        val userId = authenticationService.getCurrentUserId()
 
         if (sourceFile.isEmpty) {
             return ResponseEntity.badRequest()

@@ -61,24 +61,6 @@ class ExecuteController(
     suspend fun submitBatchExecutionRequest(
         @RequestBody requests: List<BatchExecutionItem>
     ): ResponseEntity<ApiResponse> {
-        // Check system close time
-        submissionPolicy.systemCloseAt?.let { closeAt ->
-            val now = Instant.now()
-            if (now.isAfter(closeAt) || now == closeAt) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(
-                        ApiResponse.Error(
-                            code = 403,
-                            message = "System is closed for submissions.",
-                            error =
-                                ApiError(
-                                    type = "SYSTEM_CLOSED",
-                                    details = "Submissions are disabled after close time.",
-                                ),
-                        )
-                    )
-            }
-        }
 
         if (requests.isEmpty()) {
             return ResponseEntity.badRequest()
@@ -95,21 +77,28 @@ class ExecuteController(
         try {
             val currentUserId = getCurrentUserId() // Get current user ID
 
-            // Execute submit whitelist check (submitter-based)
-            val whitelist = submissionPolicy.executeSubmitWhitelist
-            if (whitelist.isNotEmpty() && !whitelist.contains(currentUserId)) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(
-                        ApiResponse.Error(
-                            code = 403,
-                            message = "You are not allowed to submit execution requests.",
-                            error =
-                                ApiError(
-                                    type = "EXECUTE_SUBMIT_NOT_ALLOWED",
-                                    details = "Submitter is not in whitelist.",
-                                ),
-                        )
-                    )
+            // After close time: only whitelist can submit; before close: no whitelist restriction
+            submissionPolicy.systemCloseAt?.toInstant()?.let { closeAt ->
+                val now = Instant.now()
+                val afterClose = !now.isBefore(closeAt)
+                if (afterClose) {
+                    val whitelist = submissionPolicy.executeSubmitWhitelist
+                    if (whitelist.isEmpty() || !whitelist.contains(currentUserId)) {
+                        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(
+                                ApiResponse.Error(
+                                    code = 403,
+                                    message = "System is closed; only whitelisted users may submit.",
+                                    error =
+                                        ApiError(
+                                            type = "SYSTEM_CLOSED",
+                                            details =
+                                                "Submitter is not in whitelist after close time.",
+                                        ),
+                                )
+                            )
+                    }
+                }
             }
             val firstSessionId = requests.firstOrNull()?.sessionId
 
