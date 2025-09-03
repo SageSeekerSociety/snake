@@ -3,6 +3,7 @@ package org.rucca.snake.controller.domain.controller
 import jakarta.annotation.PreDestroy
 import java.io.IOException
 import java.time.Duration
+import java.time.Instant
 import java.util.*
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration.Companion.seconds
@@ -10,6 +11,7 @@ import kotlinx.coroutines.*
 import org.rucca.cheese.auth.AuthenticationService
 import org.rucca.cheese.auth.annotation.Guard
 import org.rucca.snake.common.utils.UuidV7
+import org.rucca.snake.controller.config.SubmissionPolicyProperties
 import org.rucca.snake.controller.domain.model.ApiError
 import org.rucca.snake.controller.domain.model.ApiResponse
 import org.rucca.snake.controller.domain.service.JobFlowService
@@ -31,6 +33,7 @@ class CompileController(
     private val jobFlowService: JobFlowService,
     private val authenticationService: AuthenticationService,
     private val jobQueryService: JobQueryService,
+    private val submissionPolicy: SubmissionPolicyProperties,
 ) {
     private val logger = LoggerFactory.getLogger(CompileController::class.java)
 
@@ -49,6 +52,29 @@ class CompileController(
         @RequestPart("sourceFile") sourceFile: MultipartFile
     ): ResponseEntity<ApiResponse> {
         val userId = authenticationService.getCurrentUserId()
+
+        // After close time: only whitelist can submit; before close: no whitelist restriction
+        submissionPolicy.systemCloseAt?.toInstant()?.let { closeAt ->
+            val now = Instant.now()
+            val afterClose = !now.isBefore(closeAt)
+            if (afterClose) {
+                val whitelist = submissionPolicy.executeSubmitWhitelist
+                if (whitelist.isEmpty() || !whitelist.contains(userId)) {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(
+                            ApiResponse.Error(
+                                code = 403,
+                                message = "System is closed; only whitelisted users may submit.",
+                                error =
+                                    ApiError(
+                                        type = "SYSTEM_CLOSED",
+                                        details = "Submitter is not in whitelist after close time.",
+                                    ),
+                            )
+                        )
+                }
+            }
+        }
 
         if (sourceFile.isEmpty) {
             return ResponseEntity.badRequest()
