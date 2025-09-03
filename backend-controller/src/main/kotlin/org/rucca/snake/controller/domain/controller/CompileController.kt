@@ -68,8 +68,7 @@ class CompileController(
                                 error =
                                     ApiError(
                                         type = "SYSTEM_CLOSED",
-                                        details =
-                                            "Submitter is not in whitelist after close time.",
+                                        details = "Submitter is not in whitelist after close time.",
                                     ),
                             )
                         )

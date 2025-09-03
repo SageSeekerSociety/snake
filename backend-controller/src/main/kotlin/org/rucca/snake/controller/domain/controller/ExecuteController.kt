@@ -88,7 +88,8 @@ class ExecuteController(
                             .body(
                                 ApiResponse.Error(
                                     code = 403,
-                                    message = "System is closed; only whitelisted users may submit.",
+                                    message =
+                                        "System is closed; only whitelisted users may submit.",
                                     error =
                                         ApiError(
                                             type = "SYSTEM_CLOSED",
