@@ -125,3 +125,14 @@ rate-limiter:
       refill-unit: SECONDS            # 补充单位: 秒
       key-expression: "'execution_freq:' + #userId" # Redis Key表达式
       tokens-expression: "1"        # 每次请求固定消耗1个令牌
+
+# ===============================================
+# Submission Policy
+# ===============================================
+submission-policy:
+  # 系统截止提交时间（ISO-8601，含时区）。到点后禁止提交编译/执行请求。
+  # 当前配置：2025-09-03 北京时间 13:00 关闭
+  system-close-at: "2025-09-03T13:00:00+08:00"
+  # 允许提交执行请求的用户ID白名单（按提交者校验；被执行的程序所有者不受限制）
+  # 为空表示不启用白名单限制
+  execute-submit-whitelist: []

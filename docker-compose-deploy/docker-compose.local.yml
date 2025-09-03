@@ -232,7 +232,7 @@ services:
     image: grafana/grafana-oss:12.0.4
     container_name: grafana
     ports:
-      - "3000:3000"
+      - "3002:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana-provisioning/datasources:/etc/grafana/provisioning/datasources

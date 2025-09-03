@@ -7,6 +7,7 @@ import io.opentelemetry.extension.kotlin.asContextElement
 import jakarta.annotation.PreDestroy
 import java.io.IOException
 import java.time.Duration
+import java.time.Instant
 import java.util.*
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.*
@@ -15,6 +16,7 @@ import org.apache.catalina.connector.ClientAbortException
 import org.rucca.cheese.auth.AuthenticationService
 import org.rucca.cheese.auth.annotation.Guard
 import org.rucca.snake.common.utils.UuidV7
+import org.rucca.snake.controller.config.SubmissionPolicyProperties
 import org.rucca.snake.controller.domain.model.ApiError
 import org.rucca.snake.controller.domain.model.ApiResponse
 import org.rucca.snake.controller.domain.model.BatchExecutionItem
@@ -34,6 +36,7 @@ class ExecuteController(
     private val jobSubmitService: JobSubmitService,
     private val jobFlowService: JobFlowService,
     private val authenticationService: AuthenticationService,
+    private val submissionPolicy: SubmissionPolicyProperties,
     openTelemetry: OpenTelemetry,
 ) {
     private val logger = LoggerFactory.getLogger(ExecuteController::class.java)
@@ -58,6 +61,25 @@ class ExecuteController(
     suspend fun submitBatchExecutionRequest(
         @RequestBody requests: List<BatchExecutionItem>
     ): ResponseEntity<ApiResponse> {
+        // Check system close time
+        submissionPolicy.systemCloseAt?.let { closeAt ->
+            val now = Instant.now()
+            if (now.isAfter(closeAt) || now == closeAt) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(
+                        ApiResponse.Error(
+                            code = 403,
+                            message = "System is closed for submissions.",
+                            error =
+                                ApiError(
+                                    type = "SYSTEM_CLOSED",
+                                    details = "Submissions are disabled after close time.",
+                                ),
+                        )
+                    )
+            }
+        }
+
         if (requests.isEmpty()) {
             return ResponseEntity.badRequest()
                 .body(
@@ -72,6 +94,23 @@ class ExecuteController(
 
         try {
             val currentUserId = getCurrentUserId() // Get current user ID
+
+            // Execute submit whitelist check (submitter-based)
+            val whitelist = submissionPolicy.executeSubmitWhitelist
+            if (whitelist.isNotEmpty() && !whitelist.contains(currentUserId)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(
+                        ApiResponse.Error(
+                            code = 403,
+                            message = "You are not allowed to submit execution requests.",
+                            error =
+                                ApiError(
+                                    type = "EXECUTE_SUBMIT_NOT_ALLOWED",
+                                    details = "Submitter is not in whitelist.",
+                                ),
+                        )
+                    )
+            }
             val firstSessionId = requests.firstOrNull()?.sessionId
 
             // Ensure all other items in 'requests' have the SAME sessionId.
