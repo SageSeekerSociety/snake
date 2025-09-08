@@ -45,12 +45,13 @@ interface CompilationJobRepository : JpaRepository<CompilationJob, UUID> {
 
     interface LatestSuccessSourceProjection {
         fun getUserId(): Long
+
         fun getSourceCodeRef(): String
     }
 
     /**
-     * Fetch the latest successful compilation source per user using PostgreSQL DISTINCT ON.
-     * Orders by most recent end_compile_time (fallback by submit_time when null).
+     * Fetch the latest successful compilation source per user using PostgreSQL DISTINCT ON. Orders
+     * by most recent end_compile_time (fallback by submit_time when null).
      */
     @Query(
         value =

@@ -9,8 +9,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.time.ZonedDateTime
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
@@ -158,7 +158,8 @@ class MinioService(private val minioClient: MinioClient) {
                 }
                 true
             } catch (e: CancellationException) {
-                // Rethrow coroutine cancellations to avoid swallowing structured concurrency signals
+                // Rethrow coroutine cancellations to avoid swallowing structured concurrency
+                // signals
                 throw e
             } catch (e: Exception) {
                 logger.error("Error streaming object '{}' to output: {}", objectKey, e.message, e)
