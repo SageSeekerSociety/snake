@@ -4,11 +4,13 @@ import io.minio.*
 import io.minio.errors.ErrorResponseException
 import io.minio.errors.MinioException
 import java.io.InputStream
+import java.io.OutputStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.time.ZonedDateTime
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
@@ -135,6 +137,36 @@ class MinioService(private val minioClient: MinioClient) {
                     Files.deleteIfExists(destinationPath)
                 } catch (_: Exception) {}
                 false
+            }
+        }
+    }
+
+    /**
+     * Streams an object from MinIO directly into a provided OutputStream. Caller owns the lifecycle
+     * of the OutputStream; this method will not close it.
+     */
+    suspend fun copyObjectToOutput(objectKey: String, output: OutputStream): Boolean {
+        return withContext(Dispatchers.IO) {
+            var inputStream: InputStream? = null
+            try {
+                val args = GetObjectArgs.builder().bucket(bucketName).`object`(objectKey).build()
+                inputStream = minioClient.getObject(args)
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var bytesRead: Int
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    output.write(buffer, 0, bytesRead)
+                }
+                true
+            } catch (e: CancellationException) {
+                // Rethrow coroutine cancellations to avoid swallowing structured concurrency signals
+                throw e
+            } catch (e: Exception) {
+                logger.error("Error streaming object '{}' to output: {}", objectKey, e.message, e)
+                false
+            } finally {
+                try {
+                    inputStream?.close()
+                } catch (_: Exception) {}
             }
         }
     }

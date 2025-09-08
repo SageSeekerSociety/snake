@@ -126,6 +126,14 @@ rate-limiter:
       key-expression: "'execution_freq:' + #userId" # Redis Key表达式
       tokens-expression: "1"        # 每次请求固定消耗1个令牌
 
+    export:
+      capacity: 3                    # 防止高频导出
+      refill-rate: 3
+      refill-period: 1
+      refill-unit: MINUTES
+      key-expression: "'export:' + #userId"
+      tokens-expression: "1"
+
 # ===============================================
 # Submission Policy
 # ===============================================
