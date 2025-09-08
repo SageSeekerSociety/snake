@@ -179,3 +179,16 @@ paths:
                           $ref: '#/components/schemas/User'
                     required:
                       - users
+  /compile/export/latest-sources.zip:
+    get:
+      summary: Export latest successful source per user as ZIP
+      responses:
+        '200':
+          description: ZIP stream
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        '403':
+          description: Forbidden (not in admin whitelist)

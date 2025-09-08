@@ -24,6 +24,7 @@ import org.rucca.cheese.auth.error.PermissionDeniedError
 import org.rucca.cheese.auth.error.TokenExpiredError
 import org.rucca.cheese.auth.persistent.IdGetter
 import org.rucca.cheese.auth.persistent.IdType
+import org.rucca.snake.controller.config.SubmissionPolicyProperties
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.web.context.request.RequestContextHolder
@@ -33,6 +34,7 @@ import org.springframework.web.context.request.ServletRequestAttributes
 class AuthorizationService(
     private val authConfig: AuthConfig,
     private val objectMapper: ObjectMapper,
+    private val submissionPolicy: SubmissionPolicyProperties,
 ) {
     val customAuthLogics = CustomAuthLogics()
     val ownerIds = OwnerIds()
@@ -125,6 +127,13 @@ class AuthorizationService(
             }
             return
         }
+        // Dynamic admin whitelist: allow export/program for userIds in submission policy whitelist
+        if (action == "export" && resourceType == "program") {
+            if (submissionPolicy.executeSubmitWhitelist.contains(userId)) {
+                return
+            }
+        }
+
         if (authConfig.warnAuditFailure)
             logger.warn(
                 "Operation denied: '$action' on resource (resourceType: '$resourceType', resourceId: $resourceId, authInfo: $authInfo)." +
