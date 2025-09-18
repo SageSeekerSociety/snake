@@ -29,6 +29,39 @@ services:
       retries: 5
       start_period: 30s
 
+  create-buckets:
+    image: minio/mc:latest
+    env_file: .env
+    container_name: minio-mc-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set myminio http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD; do
+        echo '... waiting for minio service ...';
+        sleep 1;
+      done;
+      
+      echo 'MinIO is ready. Proceeding with bucket creation.';
+
+      BUCKETS_TO_CREATE=$(echo $$MINIO_DEFAULT_BUCKETS | tr ',' ' ');
+
+      for bucket in $$BUCKETS_TO_CREATE; do
+        echo \"--- Processing bucket: $$bucket ---\";
+        if mc ls myminio/$$bucket > /dev/null 2>&1; then
+          echo \"Bucket '$$bucket' already exists. Skipping.\";
+        else
+          echo \"Creating bucket '$$bucket'...\";
+          mc mb myminio/$$bucket;
+          echo \"Bucket '$$bucket' created.\";
+        fi
+      done;
+
+      echo 'All buckets processed. Initialization complete.';
+      exit 0;
+      "
+
   valkey:
     image: valkey/valkey:latest
     env_file: .env
