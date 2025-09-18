@@ -153,6 +153,39 @@ services:
       retries: 5
       start_period: 30s
 
+  create-buckets:
+    image: minio/mc:latest
+    env_file: .env
+    container_name: minio-mc-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set myminio http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD; do
+        echo '... waiting for minio service ...';
+        sleep 1;
+      done;
+
+      echo 'MinIO is ready. Proceeding with bucket creation.';
+
+      BUCKETS_TO_CREATE=$(echo $$MINIO_DEFAULT_BUCKETS | tr ',' ' ');
+
+      for bucket in $$BUCKETS_TO_CREATE; do
+        echo \"--- Processing bucket: $$bucket ---\";
+        if mc ls myminio/$$bucket > /dev/null 2>&1; then
+          echo \"Bucket '$$bucket' already exists. Skipping.\";
+        else
+          echo \"Creating bucket '$$bucket'...\";
+          mc mb myminio/$$bucket;
+          echo \"Bucket '$$bucket' created.\";
+        fi
+      done;
+
+      echo 'All buckets processed. Initialization complete.';
+      exit 0;
+      "
+
   cheese-auth:
     image: ghcr.io/sageseekersociety/cheese-auth:${CHEESE_AUTH_TAG:-main}
     env_file: .env
@@ -211,10 +244,10 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/prometheus
     command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
     ports:
       - "9091:9090"
     healthcheck:
@@ -249,8 +282,8 @@ services:
     container_name: jaeger
     ports:
       - "16686:16686" # Jaeger UI
-      - "4317:4317"   # OTLP gRPC
-      - "4318:4318"   # OTLP HTTP
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
     environment:
       - COLLECTOR_OTLP_ENABLED=true
     restart: unless-stopped
@@ -265,7 +298,8 @@ services:
       - loki_data:/loki
     command: -config.file=/etc/loki/local-config.yaml
     healthcheck:
-      test: ["CMD-SHELL","wget -qO- http://127.0.0.1:3100/ready | grep -q 'ready'"]
+      test:
+        ["CMD-SHELL", "wget -qO- http://127.0.0.1:3100/ready | grep -q 'ready'"]
       start_period: 60s
       interval: 10s
       timeout: 5s
@@ -276,8 +310,8 @@ services:
     image: grafana/promtail:3.5.3
     command: ["-config.file=/etc/promtail/config.yml"]
     volumes:
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro   # 读 Docker 日志文件
-      - /var/run/docker.sock:/var/run/docker.sock:ro               # 取容器元数据（可选但强烈建议）
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro # 读 Docker 日志文件
+      - /var/run/docker.sock:/var/run/docker.sock:ro # 取容器元数据（可选但强烈建议）
       - promtail_positions:/var/lib/promtail
       - ./promtail-config.yml:/etc/promtail/config.yml:ro
     depends_on:
