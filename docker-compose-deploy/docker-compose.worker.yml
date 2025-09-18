@@ -1,0 +1,50 @@
+services:
+  backend-worker:
+    image: ${WORKER_IMAGE:-ghcr.io/sageseekersociety/snake-worker:${BACKEND_WORKER_TAG:-main}}
+    container_name: snake-worker-standalone
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://${MAIN_NODE_IP}:4317
+      - OTEL_SERVICE_NAME=snake-worker
+      - OTEL_TRACES_EXPORTER=otlp
+      - OTEL_METRICS_EXPORTER=none
+      - OTEL_PROPAGATORS=tracecontext,baggage
+      - OTEL_TRACES_SAMPLER=parentbased_traceidratio
+      - SPRING_PROFILES_ACTIVE=prod
+      - MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,prometheus
+    cgroup: host
+    volumes:
+      - ./application-worker.yml:/app/config/application.yml:ro
+    tmpfs:
+      - /app/data:exec,size=1G
+      - /app/cache:exec,size=2G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - logging=promtail
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health"]
+      start_period: 180s
+      start_interval: 5s
+      interval: 1m
+      timeout: 10s
+      retries: 3
+    privileged: true
+
+  promtail:
+    image: grafana/promtail:3.5.3
+    container_name: promtail-worker
+    restart: unless-stopped
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - promtail_positions:/var/lib/promtail
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
+
+volumes:
+  promtail_positions:
