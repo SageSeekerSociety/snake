@@ -3,12 +3,14 @@
 [![Build Projects](https://github.com/SageSeekerSociety/snake/actions/workflows/build.yml/badge.svg)](https://github.com/SageSeekerSociety/snake/actions/workflows/build.yml)
 
 ## 部署方法
-本项目采用 docker compose 部署，首先需要安装 docker 和 docker-compose。
+本项目采用 Docker Compose 部署，首先需要安装 docker 和 docker-compose。
 
 使用以下命令启动项目：
 ```shell
 git clone https://github.com/SageSeekerSociety/snake
-cd snake/docker-compose-deploy
+cd snake
+git submodule update --init --recursive
+cd docker-compose-deploy
 cp sample.env .env
 docker compose up
 ```
@@ -18,13 +20,19 @@ docker compose up
 
 更详细的部署方法可以参考[部署文档](docs/deployment.md)
 
-## 开发
-
-参见当前代码库的结构[文档](docs/codebase.md)
-
 启动后各个服务的路径如下：
 | 服务 | 路径 |
 | --- | --- |
 | Cheese Auth Server | /api/cheese-auth |
 | Sandbox Server | /api/sandbox |
 
+## 前端子模块
+本仓库的 `frontend/` 目录链接到独立的前端仓库 [`snake-frontend`](https://github.com/SageSeekerSociety/snake-frontend)。
+
+- 首次克隆时请使用 `git clone --recurse-submodules`，或在仓库根目录运行 `git submodule update --init --recursive`。
+- 如果需要同步前端仓库的最新提交，在仓库根目录运行 `git submodule update --remote frontend`。
+- 修改前端代码时请在 `frontend/` 目录内按前端仓库的流程单独提交和推送。
+
+## 开发
+
+参见当前代码库的结构[文档](docs/codebase.md) 以及前端代码库的[文档](docs/frontend.md)
