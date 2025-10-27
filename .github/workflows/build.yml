@@ -53,28 +53,28 @@ jobs:
           fi
 
       - name: Upload Controller jar
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: backend-controller-jar
           path: backend-controller/target/snake.controller-*.jar
           if-no-files-found: error
 
       - name: Upload Worker jar
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: backend-worker-jar
           path: backend-worker/target/snake.worker-*.jar
           if-no-files-found: error
 
       - name: Upload Controller Coverage Report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: backend-controller-coverage
           path: backend-controller/target/site/jacoco
           if-no-files-found: warn
 
       - name: Upload Worker Coverage Report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: backend-worker-coverage
           path: backend-worker/target/site/jacoco
